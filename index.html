@@ -41,11 +41,17 @@
     const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=600&auto=format&fit=crop&q=80";
 
     const INDIAN_CITIES = {
-      Bengaluru: ['Koramangala', 'Indiranagar', 'HSR Layout', 'Whitefield'],
-      Pune: ['Kothrud', 'Koregaon Park', 'Baner', 'Viman Nagar'],
-      Mumbai: ['Bandra West', 'Andheri West', 'Powai', 'Lower Parel'],
-      'Delhi NCR': ['Hauz Khas', 'DLF Phase 4, Gurugram', 'Noida Sector 62', 'Vasant Kunj'],
+      Bengaluru: ['Koramangala', 'Indiranagar', 'HSR Layout', 'Whitefield', 'Bellandur', 'Marathahalli', 'Electronic City', 'BTM Layout', 'JP Nagar', 'Hebbal'],
+      Pune: ['Kothrud', 'Koregaon Park', 'Baner', 'Viman Nagar', 'Wakad', 'Hinjewadi', 'Kharadi', 'Hadapsar', 'Aundh', 'Shivajinagar'],
+      Mumbai: ['Bandra West', 'Andheri West', 'Powai', 'Lower Parel', 'Malad West', 'Goregaon', 'Dadar', 'Chembur', 'Thane West', 'Navi Mumbai (Vashi)'],
+      'Delhi NCR': ['Hauz Khas', 'DLF Phase 4, Gurugram', 'Cyber City / Sushant Lok, Gurugram', 'Noida Sector 62', 'Noida Sector 18', 'Vasant Kunj', 'Saket', 'Dwarka', 'Laxmi Nagar', 'Indirapuram'],
+      Kochi: ['Kakkanad', 'Edappally', 'Kalamassery', 'Palarivattom', 'Kaloor', 'MG Road', 'Vyttila', 'Panampilly Nagar', 'Aluva', 'Fort Kochi'],
+      Indore: ['Vijay Nagar', 'Palasia', 'Bhawarkua', 'Rau', 'Nipania', 'AB Road', 'Scheme 78', 'Sudama Nagar', 'Annapurna', 'Geeta Bhawan'],
+      Chennai: ['Adyar', 'Velachery', 'T. Nagar', 'OMR (Thoraipakkam)', 'Sholinganallur', 'Anna Nagar', 'Nungambakkam', 'Guindy', 'Porur', 'Thiruvanmiyur'],
+      Kolkata: ['Salt Lake (Sector V)', 'New Town', 'Ballygunge', 'Park Street', 'Jadavpur', 'Gariahat', 'Tollygunge', 'Dum Dum', 'Behala', 'Kasba'],
+      Chandigarh: ['Sector 17', 'Sector 22', 'Sector 34', 'Sector 35', 'Sector 15', 'IT Park / Manimajra', 'Mohali Phase 7', 'Mohali Sector 67', 'Panchkula Sector 11', 'Zirakpur']
     };
+    const CITY_LIST = Object.keys(INDIAN_CITIES);
 
     const INDIAN_ICEBREAKERS = [
       'How should we split the cook, maid & WiFi bills each month?',
@@ -54,7 +60,6 @@
       'How do we divide the 11-month security deposit and notice period?',
     ];
 
-    // Compress phone camera photos to crisp ~720px JPEG before uploading to Supabase Storage
     async function compressAndUploadImage(file, uid, prefix) {
       const imgUrl = URL.createObjectURL(file);
       try {
@@ -200,7 +205,7 @@
             <BrandLogo size={46} subtitle="Vibe Check Before the 11-Month Lock-In" />
             <div className="space-y-1">
               <h1 className="text-2xl font-extrabold text-white">{mode === 'login' ? 'Sign in to Make my Mate' : 'Create your Flatmate Account'}</h1>
-              <p className="text-xs text-[#9E9E9E]">Verified roommates across Bengaluru, Pune, Mumbai &amp; Delhi NCR.</p>
+              <p className="text-xs text-[#9E9E9E]">Verified roommates across Bengaluru, Pune, Mumbai, Delhi NCR, Kochi, Indore, Chennai, Kolkata &amp; Chandigarh.</p>
             </div>
             <div className="flex p-1 rounded-xl bg-black border border-[#C0C0C0]/25">
               <button type="button" onClick={() => { setMode('login'); setErr(null); }} className={`flex-1 py-2 rounded-lg text-xs font-bold transition ${mode === 'login' ? 'bg-[#FF6B00] text-white' : 'text-[#9E9E9E]'}`}>Sign In</button>
@@ -229,7 +234,8 @@
       const [avatarUrl, setAvatarUrl] = useState(DEFAULT_AVATAR);
       const [uploading, setUploading] = useState(false);
       const [city, setCity] = useState('Bengaluru');
-      const [locality, setLocality] = useState('Koramangala');
+      const [locality, setLocality] = useState(INDIAN_CITIES.Bengaluru[0]);
+      const [customLocality, setCustomLocality] = useState('');
       const [minBudget, setMinBudget] = useState(14000);
       const [maxBudget, setMaxBudget] = useState(24000);
       const [sleepSchedule, setSleepSchedule] = useState('Balanced 12 AM');
@@ -253,6 +259,7 @@
 
       const handleSubmit = async (e) => {
         e.preventDefault(); setSaving(true); setErr(null);
+        const finalLocality = locality === '__OTHER__' ? (customLocality.trim() || 'City Center') : locality;
         try {
           const { error: pErr } = await supabase.from('profiles').upsert({
             id: uid, email: session.user.email, full_name: fullName.trim(), age: Number(age), gender,
@@ -261,7 +268,7 @@
           });
           if (pErr) throw pErr;
           const { error: prefErr } = await supabase.from('lifestyle_preferences').upsert({
-            user_id: uid, city, locality, min_budget: Number(minBudget), max_budget: Number(maxBudget),
+            user_id: uid, city, locality: finalLocality, min_budget: Number(minBudget), max_budget: Number(maxBudget),
             split_ratio: '50/50', sleep_schedule: sleepSchedule, cleaning_habit: cleaningHabit,
             smoking_habit: smokingHabit, pet_preference: petPreference, has_room: hasRoom
           });
@@ -295,14 +302,23 @@
               <select value={gender} onChange={(e) => setGender(e.target.value)} className="px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white"><option>Male</option><option>Female</option><option>Non-binary</option></select>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
-              <div><label className="block text-[11px] text-[#9E9E9E] mb-1">City</label><select value={city} onChange={(e) => { setCity(e.target.value); setLocality(INDIAN_CITIES[e.target.value][0]); }} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">{Object.keys(INDIAN_CITIES).map((c) => <option key={c}>{c}</option>)}</select></div>
-              <div><label className="block text-[11px] text-[#9E9E9E] mb-1">Locality</label><select value={locality} onChange={(e) => setLocality(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">{INDIAN_CITIES[city].map((l) => <option key={l}>{l}</option>)}</select></div>
+              <div><label className="block text-[11px] text-[#9E9E9E] mb-1">City</label><select value={city} onChange={(e) => { setCity(e.target.value); setLocality(INDIAN_CITIES[e.target.value][0]); }} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">{CITY_LIST.map((c) => <option key={c}>{c}</option>)}</select></div>
+              <div>
+                <label className="block text-[11px] text-[#9E9E9E] mb-1">Locality</label>
+                <select value={locality} onChange={(e) => setLocality(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">
+                  {INDIAN_CITIES[city].map((l) => <option key={l}>{l}</option>)}
+                  <option value="__OTHER__">Other (Type Area)</option>
+                </select>
+              </div>
             </div>
+            {locality === '__OTHER__' && (
+              <input required placeholder={`Type your area in ${city}`} value={customLocality} onChange={(e) => setCustomLocality(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#FF6B00] text-xs text-white" />
+            )}
             <div>
               <label className="block text-[11px] text-[#9E9E9E] mb-1">Monthly Budget: ₹{Number(minBudget).toLocaleString('en-IN')} – ₹{Number(maxBudget).toLocaleString('en-IN')}</label>
               <div className="grid grid-cols-2 gap-3">
-                <input type="range" min="10000" max="30000" step="1000" value={minBudget} onChange={(e) => setMinBudget(Number(e.target.value))} />
-                <input type="range" min="14000" max="35000" step="1000" value={maxBudget} onChange={(e) => setMaxBudget(Math.max(minBudget + 2000, Number(e.target.value)))} />
+                <input type="range" min="8000" max="30000" step="1000" value={minBudget} onChange={(e) => setMinBudget(Number(e.target.value))} />
+                <input type="range" min="12000" max="40000" step="1000" value={maxBudget} onChange={(e) => setMaxBudget(Math.max(minBudget + 2000, Number(e.target.value)))} />
               </div>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
@@ -333,18 +349,17 @@
       const [kycQueue, setKycQueue] = useState([]);
       const [weights, setWeights] = useState({ location_budget_weight: 35, sleep_weight: 25, cleanliness_weight: 20, smoking_pets_weight: 20 });
 
-      // Smooth swipe drag + optimistic swiped IDs
       const [optimisticSwiped, setOptimisticSwiped] = useState([]);
       const [dragX, setDragX] = useState(0);
       const startXRef = useRef(null);
       const chatEndRef = useRef(null);
 
-      // Notifications & Toasts
       const [notifPerm, setNotifPerm] = useState(() => ('Notification' in window ? Notification.permission : 'denied'));
       const [toast, setToast] = useState(null);
       const [unreadCount, setUnreadCount] = useState(0);
 
       const [cityFilter, setCityFilter] = useState('All');
+      const [flatsCityFilter, setFlatsCityFilter] = useState('All');
       const [compareItem, setCompareItem] = useState(null);
       const [vibeOutput, setVibeOutput] = useState(null);
       const [matchPopup, setMatchPopup] = useState(null);
@@ -363,12 +378,13 @@
       const [showMeetupModal, setShowMeetupModal] = useState(false);
       const [meetupType, setMeetupType] = useState('Coffee Meetup');
       const [meetupTime, setMeetupTime] = useState('Sunday, 4:00 PM');
-      const [meetupLocation, setMeetupLocation] = useState('Third Wave Coffee, Koramangala');
+      const [meetupLocation, setMeetupLocation] = useState('Local Cafe / Flat Tour');
 
       const [showFlatForm, setShowFlatForm] = useState(false);
       const [flatTitle, setFlatTitle] = useState('');
       const [flatCity, setFlatCity] = useState('Bengaluru');
-      const [flatLocality, setFlatLocality] = useState('Koramangala');
+      const [flatLocality, setFlatLocality] = useState(INDIAN_CITIES.Bengaluru[0]);
+      const [flatCustomLoc, setFlatCustomLoc] = useState('');
       const [flatBhk, setFlatBhk] = useState('2BHK');
       const [flatRent, setFlatRent] = useState(44000);
       const [flatDeposit, setFlatDeposit] = useState(120000);
@@ -385,9 +401,7 @@
         if (!('Notification' in window)) return;
         const perm = await Notification.requestPermission();
         setNotifPerm(perm);
-        if (perm === 'granted') {
-          pushNotification('Alerts Enabled!', 'You will now get instant notifications for new matches & messages.', tab);
-        }
+        if (perm === 'granted') pushNotification('Alerts Enabled!', 'You will now get instant notifications for new matches & messages.', tab);
       };
 
       const loadAll = async () => {
@@ -413,7 +427,6 @@
 
       useEffect(() => { loadAll(); }, [uid]);
 
-      // Global Realtime Notification Listeners (Matches, Messages, KYC Verified)
       useEffect(() => {
         const channel = supabase.channel(`global-notifs-${uid}`)
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches' }, (payload) => {
@@ -429,11 +442,8 @@
             const msg = payload.new;
             if (msg.sender_id !== uid) {
               setUnreadCount((c) => c + 1);
-              const label = msg.message_type === 'meetup_invite' ? 'New Meetup Invite' : 'New Flatmate Message';
-              pushNotification(label, msg.content, 'matches');
-              if (activeMatchId === msg.match_id) {
-                setMessages((prev) => (prev.some((x) => x.id === msg.id) ? prev : [...prev, msg]));
-              }
+              pushNotification(msg.message_type === 'meetup_invite' ? 'New Meetup Invite' : 'New Flatmate Message', msg.content, 'matches');
+              if (activeMatchId === msg.match_id) setMessages((prev) => (prev.some((x) => x.id === msg.id) ? prev : [...prev, msg]));
             }
           })
           .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${uid}` }, (payload) => {
@@ -443,14 +453,12 @@
             }
           })
           .subscribe();
-
         return () => { supabase.removeChannel(channel); };
       }, [uid, activeMatchId]);
 
       useEffect(() => {
         if (!activeMatchId) return;
-        supabase.from('messages').select('*').eq('match_id', activeMatchId).order('created_at', { ascending: true })
-          .then(({ data }) => setMessages(data || []));
+        supabase.from('messages').select('*').eq('match_id', activeMatchId).order('created_at', { ascending: true }).then(({ data }) => setMessages(data || []));
       }, [activeMatchId]);
 
       useEffect(() => {
@@ -466,6 +474,10 @@
           .map((p) => ({ profile: p, prefs: prefsMap[p.id], comp: computeCompatibility(myPrefs, prefsMap[p.id], weights) }))
           .sort((a, b) => (a.profile.is_boosted !== b.profile.is_boosted ? (a.profile.is_boosted ? -1 : 1) : b.comp.totalScore - a.comp.totalScore));
       }, [profiles, prefsMap, swipes, optimisticSwiped, myPrefs, weights, cityFilter, uid]);
+
+      const visibleListings = useMemo(() => {
+        return listings.filter((l) => l.status === 'active' && (flatsCityFilter === 'All' || l.city === flatsCityFilter));
+      }, [listings, flatsCityFilter]);
 
       if (loading) return <div className="min-h-screen bg-black flex items-center justify-center"><p className="text-sm font-bold text-[#FF6B00]">Loading Make my Mate...</p></div>;
       if (!myProfile || !myPrefs) return <OnboardingWizard session={session} onCompleted={loadAll} />;
@@ -543,16 +555,9 @@
 
       return (
         <div className="min-h-screen bg-black text-white flex flex-col">
-          {/* Floating Live Toast Notification */}
           {toast && (
-            <button
-              onClick={() => { setTab(toast.targetTab); setUnreadCount(0); setToast(null); }}
-              className="fixed top-4 right-4 z-50 max-w-xs text-left p-3.5 rounded-2xl bg-[#141414] border-2 border-[#FF6B00] shadow-2xl space-y-1 transition-all"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-extrabold text-[#FF6B00]">{toast.title}</span>
-                <span className="text-[10px] text-[#9E9E9E]">Tap to open</span>
-              </div>
+            <button onClick={() => { setTab(toast.targetTab); setUnreadCount(0); setToast(null); }} className="fixed top-4 right-4 z-50 max-w-xs text-left p-3.5 rounded-2xl bg-[#141414] border-2 border-[#FF6B00] shadow-2xl space-y-1 transition-all">
+              <div className="flex items-center justify-between gap-2"><span className="text-xs font-extrabold text-[#FF6B00]">{toast.title}</span><span className="text-[10px] text-[#9E9E9E]">Tap to open</span></div>
               <p className="text-xs text-white line-clamp-2">{toast.body}</p>
             </button>
           )}
@@ -561,11 +566,7 @@
             <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
               <BrandLogo size={36} subtitle="Compatible Flatmates Before Signing" />
               <div className="flex items-center gap-2">
-                <button
-                  onClick={requestNotifPermission}
-                  title="Notifications"
-                  className={`relative p-2 rounded-xl border text-xs font-bold flex items-center gap-1 ${notifPerm === 'granted' ? 'bg-[#141414] border-[#C0C0C0]/25 text-[#FF6B00]' : 'bg-[#FF6B00] border-[#FF6B00] text-white'}`}
-                >
+                <button onClick={requestNotifPermission} title="Notifications" className={`relative p-2 rounded-xl border text-xs font-bold flex items-center gap-1 ${notifPerm === 'granted' ? 'bg-[#141414] border-[#C0C0C0]/25 text-[#FF6B00]' : 'bg-[#FF6B00] border-[#FF6B00] text-white'}`}>
                   <SvgIcon name="bell" className="w-4 h-4" />
                   {notifPerm !== 'granted' && <span className="hidden sm:inline text-[11px]">Enable Alerts</span>}
                   {unreadCount > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-white text-black text-[10px] font-extrabold flex items-center justify-center">{unreadCount}</span>}
@@ -589,11 +590,7 @@
                   { id: 'matches', label: '4-Stage Chat', icon: 'chat', count: matches.length, badge: unreadCount },
                   { id: 'flats', label: 'Verified Flats', icon: 'building', count: listings.filter((l) => l.status === 'active').length },
                 ].map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => { setTab(item.id); if (item.id === 'matches') setUnreadCount(0); }}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition ${tab === item.id ? 'bg-[#FF6B00] text-white' : 'bg-[#141414] border border-[#C0C0C0]/25 text-[#C0C0C0]'}`}
-                  >
+                  <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'matches') setUnreadCount(0); }} className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition ${tab === item.id ? 'bg-[#FF6B00] text-white' : 'bg-[#141414] border border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>
                     <SvgIcon name={item.icon} className="w-3.5 h-3.5" /><span>{item.label}</span>
                     <span className="px-1.5 py-0.5 rounded-full bg-black/40 text-[10px]">{item.badge > 0 ? `${item.badge} new` : item.count}</span>
                   </button>
@@ -604,11 +601,11 @@
 
           {tab === 'discover' && (
             <main className="max-w-5xl mx-auto w-full px-4 py-6">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+              <div className="space-y-3 mb-5">
                 <div><h2 className="text-xl font-extrabold">Discover Compatible Flatmates</h2><p className="text-xs text-[#9E9E9E]">Drag card right to Match or left to Pass</p></div>
-                <div className="flex flex-wrap gap-1.5">
-                  {['All', 'Bengaluru', 'Pune', 'Mumbai', 'Delhi NCR'].map((c) => (
-                    <button key={c} onClick={() => setCityFilter(c)} className={`px-3 py-1 rounded-full text-xs font-bold border ${cityFilter === c ? 'bg-[#FF6B00] border-[#FF6B00] text-white' : 'bg-[#141414] border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>{c}</button>
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  {['All', ...CITY_LIST].map((c) => (
+                    <button key={c} onClick={() => setCityFilter(c)} className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ${cityFilter === c ? 'bg-[#FF6B00] border-[#FF6B00] text-white' : 'bg-[#141414] border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>{c}</button>
                   ))}
                 </div>
               </div>
@@ -660,8 +657,8 @@
                   </div>
                 ) : (
                   <div className="p-10 rounded-3xl bg-[#0D0D0D] border border-[#C0C0C0]/25 text-center space-y-3">
-                    <p className="text-base font-bold">No more profiles in this filter</p>
-                    <p className="text-xs text-[#9E9E9E]">Share Make my Mate with friends or check Verified Flats.</p>
+                    <p className="text-base font-bold">No profiles yet in {cityFilter}</p>
+                    <p className="text-xs text-[#9E9E9E]">Share Make my Mate with friends in {cityFilter} or switch to All cities.</p>
                   </div>
                 )}
               </div>
@@ -755,7 +752,7 @@
           )}
 
           {tab === 'flats' && (
-            <main className="max-w-7xl mx-auto w-full px-4 py-6 space-y-6">
+            <main className="max-w-7xl mx-auto w-full px-4 py-6 space-y-5">
               <div className="p-6 rounded-2xl bg-[#0D0D0D] border-2 border-[#FF6B00] flex flex-wrap items-center justify-between gap-4">
                 <div><h2 className="text-lg font-extrabold">Verified Flats &amp; Priority Boost</h2><p className="text-xs text-[#C0C0C0]">Transparent per-person rent &amp; security deposit breakdowns.</p></div>
                 <div className="flex gap-3">
@@ -764,11 +761,12 @@
                 </div>
               </div>
               {showFlatForm && (
-                <form onSubmit={async (e) => { e.preventDefault(); const div = flatBhk === '3BHK' ? 3 : 2; await supabase.from('verified_listings').insert({ owner_id: uid, title: flatTitle, city: flatCity, locality: flatLocality, bhk_type: flatBhk, total_rent: Number(flatRent), per_person_rent: Math.round(Number(flatRent) / div), security_deposit: Number(flatDeposit), amenities: ['High-Speed WiFi', 'Cook + Maid'], image_url: flatImgUrl, is_verified: false, status: 'active' }); setFlatTitle(''); setFlatImgUrl(''); setShowFlatForm(false); loadAll(); }} className="p-5 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 space-y-3">
+                <form onSubmit={async (e) => { e.preventDefault(); const div = flatBhk === '3BHK' ? 3 : 2; const finalLoc = flatLocality === '__OTHER__' ? (flatCustomLoc.trim() || 'City Center') : flatLocality; await supabase.from('verified_listings').insert({ owner_id: uid, title: flatTitle, city: flatCity, locality: finalLoc, bhk_type: flatBhk, total_rent: Number(flatRent), per_person_rent: Math.round(Number(flatRent) / div), security_deposit: Number(flatDeposit), amenities: ['High-Speed WiFi', 'Cook + Maid'], image_url: flatImgUrl, is_verified: false, status: 'active' }); setFlatTitle(''); setFlatCustomLoc(''); setFlatImgUrl(''); setShowFlatForm(false); loadAll(); }} className="p-5 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 space-y-3">
                   <div className="grid sm:grid-cols-3 gap-3">
                     <input required placeholder="Listing Title" value={flatTitle} onChange={(e) => setFlatTitle(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
-                    <select value={flatCity} onChange={(e) => setFlatCity(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs">{Object.keys(INDIAN_CITIES).map((c) => <option key={c}>{c}</option>)}</select>
-                    <input required placeholder="Locality" value={flatLocality} onChange={(e) => setFlatLocality(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                    <select value={flatCity} onChange={(e) => { setFlatCity(e.target.value); setFlatLocality(INDIAN_CITIES[e.target.value][0]); }} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs">{CITY_LIST.map((c) => <option key={c}>{c}</option>)}</select>
+                    <select value={flatLocality} onChange={(e) => setFlatLocality(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs">{INDIAN_CITIES[flatCity].map((l) => <option key={l}>{l}</option>)}<option value="__OTHER__">Other (Type Area)</option></select>
+                    {flatLocality === '__OTHER__' && <input required placeholder={`Area in ${flatCity}`} value={flatCustomLoc} onChange={(e) => setFlatCustomLoc(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#FF6B00] text-xs" />}
                     <select value={flatBhk} onChange={(e) => setFlatBhk(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs"><option>2BHK</option><option>3BHK</option></select>
                     <input type="number" required value={flatRent} onChange={(e) => setFlatRent(e.target.value)} placeholder="Total Monthly Rent" className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
                     <input type="number" required value={flatDeposit} onChange={(e) => setFlatDeposit(e.target.value)} placeholder="Security Deposit" className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
@@ -783,8 +781,13 @@
                   </div>
                 </form>
               )}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                {['All', ...CITY_LIST].map((c) => (
+                  <button key={c} onClick={() => setFlatsCityFilter(c)} className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ${flatsCityFilter === c ? 'bg-[#FF6B00] border-[#FF6B00] text-white' : 'bg-[#141414] border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>{c}</button>
+                ))}
+              </div>
               <div className="grid md:grid-cols-2 gap-4">
-                {listings.filter((l) => l.status === 'active').map((l) => (
+                {visibleListings.map((l) => (
                   <div key={l.id} className="rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/25 overflow-hidden">
                     {l.image_url && <img src={l.image_url} alt={l.title} className="w-full h-44 object-cover border-b border-[#C0C0C0]/20" />}
                     <div className="p-5 space-y-3">
@@ -799,6 +802,11 @@
                     </div>
                   </div>
                 ))}
+                {visibleListings.length === 0 && (
+                  <div className="md:col-span-2 p-8 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/20 text-center text-xs text-[#9E9E9E]">
+                    No flats posted in {flatsCityFilter} yet — tap &quot;Post a Flat&quot; above to be the first!
+                  </div>
+                )}
               </div>
             </main>
           )}
@@ -816,107 +824,3 @@
                 {kycQueue.filter((k) => k.status === 'pending').length === 0 && <p className="text-xs text-[#9E9E9E]">No pending KYC requests right now.</p>}
                 {kycQueue.filter((k) => k.status === 'pending').map((k) => (
                   <div key={k.id} className="p-3 rounded-xl bg-[#141414] flex items-center justify-between">
-                    <span className="text-xs font-bold">{k.doc_type} • {k.doc_number_masked}</span>
-                    <button onClick={async () => { await supabase.from('kyc_verifications').update({ status: 'approved', reviewed_by: uid }).eq('id', k.id); await supabase.from('profiles').update({ is_verified: true }).eq('id', k.user_id); loadAll(); }} className="px-3 py-1.5 rounded-lg bg-[#FF6B00] text-xs font-bold">Approve &amp; Grant Shield</button>
-                  </div>
-                ))}
-              </div>
-            </main>
-          )}
-
-          {showAccountModal && (
-            <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
-              <div className="w-full max-w-md rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 p-6 space-y-4">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-base font-extrabold text-white">My Account &amp; Privacy</h3>
-                  <button onClick={() => setShowAccountModal(false)} className="text-[#C0C0C0] hover:text-white"><SvgIcon name="x" className="w-5 h-5" /></button>
-                </div>
-                <div className="flex items-center gap-4 p-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/20">
-                  <img src={myProfile.avatar_url || DEFAULT_AVATAR} className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6B00] shrink-0" />
-                  <div className="min-w-0 flex-1 text-xs space-y-1">
-                    <p className="font-extrabold text-white text-sm truncate">{myProfile.full_name}, {myProfile.age}</p>
-                    <p className="text-[#9E9E9E] truncate">{myPrefs.locality}, {myPrefs.city}</p>
-                    <label className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#FF6B00] text-white text-[11px] font-bold cursor-pointer mt-1">
-                      <SvgIcon name="camera" className="w-3.5 h-3.5" />
-                      <span>{uploadingAvatar ? 'Uploading...' : 'Change Photo'}</span>
-                      <input type="file" accept="image/*" onChange={handleUpdateAvatar} className="hidden" />
-                    </label>
-                  </div>
-                </div>
-                {accountMsg && <p className="text-xs text-[#FF6B00]">{accountMsg}</p>}
-                <button onClick={requestNotifPermission} className="w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-xs font-bold text-white flex items-center justify-center gap-2">
-                  <SvgIcon name="bell" className="w-4 h-4 text-[#FF6B00]" />
-                  {notifPerm === 'granted' ? 'Notifications Enabled ✓' : 'Enable Match & Chat Notifications'}
-                </button>
-                <a href="privacy.html" target="_blank" rel="noopener noreferrer" className="block w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-center text-xs font-bold text-white">View Privacy Policy &amp; Data Terms</a>
-                <div className="pt-3 border-t border-[#C0C0C0]/20 space-y-2.5">
-                  {!confirmDelete ? (
-                    <button onClick={() => setConfirmDelete(true)} className="w-full py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-xs font-bold text-[#C0C0C0] hover:text-white flex items-center justify-center gap-2"><SvgIcon name="trash" className="w-4 h-4 text-[#FF6B00]" />Delete My Account &amp; All Data</button>
-                  ) : (
-                    <div className="p-3.5 rounded-xl bg-[#141414] border border-[#FF6B00] space-y-3">
-                      <p className="text-xs text-white font-semibold">This permanently deletes your profile, swipes, matches, chats, and KYC records. Are you sure?</p>
-                      <div className="flex gap-2">
-                        <button onClick={() => setConfirmDelete(false)} className="flex-1 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs font-bold text-white">Cancel</button>
-                        <button disabled={deleting} onClick={handleDeleteAccount} className="flex-1 py-2 rounded-lg bg-[#FF6B00] text-xs font-extrabold text-white disabled:opacity-60">{deleting ? 'Deleting...' : 'Confirm Delete'}</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {compareItem && (
-            <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
-              <div className="w-full max-w-lg rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 p-6 space-y-4">
-                <div className="flex justify-between items-center"><h3 className="text-base font-extrabold">You vs. {compareItem.profile.full_name} ({compareItem.comp.totalScore}%)</h3><button onClick={() => setCompareItem(null)} className="text-[#C0C0C0] hover:text-white"><SvgIcon name="x" className="w-5 h-5" /></button></div>
-                <table className="w-full text-xs border border-[#C0C0C0]/20">
-                  <thead className="bg-[#141414] text-[#9E9E9E]"><tr><th className="p-2 text-left">Habit</th><th className="p-2 text-left">You</th><th className="p-2 text-left">Them</th></tr></thead>
-                  <tbody className="divide-y divide-[#C0C0C0]/15">
-                    {[['Sleep', myPrefs.sleep_schedule, compareItem.prefs.sleep_schedule], ['Cleanliness', myPrefs.cleaning_habit, compareItem.prefs.cleaning_habit], ['Smoking', myPrefs.smoking_habit, compareItem.prefs.smoking_habit], ['Pets', myPrefs.pet_preference, compareItem.prefs.pet_preference]].map(([l, a, b]) => (
-                      <tr key={l}><td className="p-2 text-[#9E9E9E]">{l}</td><td className="p-2">{a}</td><td className={`p-2 font-bold ${a === b ? 'text-[#FF6B00]' : ''}`}>{b}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-                <button onClick={() => setVibeOutput(buildVibeQuestions(myPrefs, compareItem.prefs, compareItem.comp.frictions))} className="w-full py-2.5 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Run Pre-Lease Vibe Check</button>
-                {vibeOutput && (
-                  <div className="p-3 rounded-xl bg-[#141414] space-y-2 text-xs">
-                    <p className="font-bold text-[#FF6B00]">Watchouts: {vibeOutput.frictions.join(' • ')}</p>
-                    <ol className="list-decimal list-inside space-y-1 text-[#C0C0C0]">{vibeOutput.questions.map((q) => <li key={q}>{q}</li>)}</ol>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {matchPopup && (
-            <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
-              <div className="w-full max-w-sm rounded-3xl bg-[#0D0D0D] border-2 border-[#FF6B00] p-6 text-center space-y-4">
-                <h2 className="text-2xl font-extrabold">It&apos;s a Flatmate Match!</h2>
-                <p className="text-xs text-[#C0C0C0]">You and {matchPopup.partner.profile.full_name} matched at {matchPopup.partner.comp.totalScore}%.</p>
-                <button onClick={() => { setMatchPopup(null); setTab('matches'); setUnreadCount(0); }} className="w-full py-3 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Open 4-Stage Chat</button>
-              </div>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    function AppRoot() {
-      const [session, setSession] = useState(null);
-      const [booting, setBooting] = useState(true);
-      useEffect(() => {
-        supabase.auth.getSession().then(({ data }) => { setSession(data.session); setBooting(false); });
-        const { data: sub } = supabase.auth.onAuthStateChange((_e, nextSession) => setSession(nextSession));
-        return () => sub.subscription.unsubscribe();
-      }, []);
-      if (booting) return <div className="min-h-screen bg-black flex items-center justify-center text-xs text-[#9E9E9E]">Connecting...</div>;
-      if (!session) return <AuthScreen onAuthSuccess={(s) => setSession(s)} />;
-      return <MainApp session={session} onSignOut={() => supabase.auth.signOut()} />;
-    }
-
-    ReactDOM.createRoot(document.getElementById('root')).render(<AppRoot />);
-    if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
-  </script>
-</body>
-</html>
