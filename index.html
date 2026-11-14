@@ -19,7 +19,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
-    html, body { background-color: #000000; color: #FFFFFF; font-family: 'Inter', system-ui, sans-serif; }
+    html, body { background-color: #000000; color: #FFFFFF; font-family: 'Inter', system-ui, sans-serif; overscroll-behavior-y: contain; }
     input[type='range'] { accent-color: #FF6B00; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #000000; }
@@ -30,7 +30,7 @@
 <body class="bg-black text-white antialiased selection:bg-[#FF6B00] selection:text-white">
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
     const SUPABASE_URL = "https://yeanjwkwzrpanecqhbtj.supabase.co";
     const SUPABASE_KEY = "sb_publishable_RNWhOgxZ0W2IyPb59o6wAg_O1S0AgMa";
@@ -38,6 +38,7 @@
       auth: { persistSession: true, autoRefreshToken: true }
     });
     const APP_REDIRECT_URL = window.location.origin + window.location.pathname;
+    const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=600&auto=format&fit=crop&q=80";
 
     const INDIAN_CITIES = {
       Bengaluru: ['Koramangala', 'Indiranagar', 'HSR Layout', 'Whitefield'],
@@ -52,6 +53,47 @@
       'Veg-only kitchen or separate utensils for non-veg cooking?',
       'How do we divide the 11-month security deposit and notice period?',
     ];
+
+    // Compress phone camera photos to crisp ~720px JPEG before uploading to Supabase Storage
+    async function compressAndUploadImage(file, uid, prefix) {
+      const imgUrl = URL.createObjectURL(file);
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const i = new Image();
+          i.onload = () => resolve(i);
+          i.onerror = reject;
+          i.src = imgUrl;
+        });
+        const maxSide = 720;
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.82));
+        const path = `${uid}/${prefix}-${Date.now()}.jpg`;
+        const { error: upErr } = await supabase.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+        if (upErr) throw upErr;
+        const { data } = supabase.storage.from('avatars').getPublicUrl(path);
+        return data.publicUrl;
+      } finally {
+        URL.revokeObjectURL(imgUrl);
+      }
+    }
+
+    async function fireDeviceNotification(title, body) {
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      try {
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.ready;
+          if (reg && reg.showNotification) {
+            await reg.showNotification(title, { body, icon: 'icon-192.png', badge: 'icon-192.png', vibrate: [140, 60, 140] });
+            return;
+          }
+        }
+        new Notification(title, { body, icon: 'icon-192.png' });
+      } catch {}
+    }
 
     const SvgIcon = ({ name, className = "w-4 h-4" }) => {
       const paths = {
@@ -69,7 +111,9 @@
         plus: <path d="M5 12h14M12 5v14" />,
         check: <path d="M20 6 9 17l-5-5" />,
         user: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
-        trash: <><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></>
+        trash: <><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></>,
+        bell: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></>,
+        camera: <><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z" /><circle cx="12" cy="13" r="3" /></>
       };
       return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{paths[name]}</svg>;
     };
@@ -95,23 +139,17 @@
 
     function computeCompatibility(me, them, weights) {
       const sum = weights.location_budget_weight + weights.sleep_weight + weights.cleanliness_weight + weights.smoking_pets_weight || 100;
-      const wLoc = (weights.location_budget_weight / sum) * 100;
-      const wSleep = (weights.sleep_weight / sum) * 100;
-      const wClean = (weights.cleanliness_weight / sum) * 100;
-      const wSP = (weights.smoking_pets_weight / sum) * 100;
-
+      const wLoc = (weights.location_budget_weight / sum) * 100, wSleep = (weights.sleep_weight / sum) * 100;
+      const wClean = (weights.cleanliness_weight / sum) * 100, wSP = (weights.smoking_pets_weight / sum) * 100;
       let locRatio = me.city === them.city ? (me.locality === them.locality ? 0.55 : 0.45) : 0.1;
-      const overlapMin = Math.max(me.min_budget, them.min_budget);
-      const overlapMax = Math.min(me.max_budget, them.max_budget);
+      const overlapMin = Math.max(me.min_budget, them.min_budget), overlapMax = Math.min(me.max_budget, them.max_budget);
       locRatio += overlapMax >= overlapMin ? 0.45 : (overlapMin - overlapMax <= 4000 ? 0.25 : 0.05);
-
       const sleepRatio = me.sleep_schedule === them.sleep_schedule ? 1 : (me.sleep_schedule.includes('Balanced') || them.sleep_schedule.includes('Balanced') ? 0.72 : 0.35);
       const cleanRatio = me.cleaning_habit === them.cleaning_habit ? 1 : (me.cleaning_habit.includes('Daily') && them.cleaning_habit.includes('Weekend') ? 0.4 : 0.75);
       const smokePts = me.smoking_habit === them.smoking_habit ? 0.5 : (me.smoking_habit === 'No Smoking' && them.smoking_habit === 'Smoker Friendly' ? 0.1 : 0.32);
       const petConflict = (me.pet_preference.startsWith('Has a') && them.pet_preference === 'No Pets') || (them.pet_preference.startsWith('Has a') && me.pet_preference === 'No Pets');
       const petPts = me.pet_preference === them.pet_preference ? 0.5 : (petConflict ? 0.1 : 0.42);
       const totalScore = Math.max(25, Math.min(99, Math.round(locRatio * wLoc + sleepRatio * wSleep + cleanRatio * wClean + (smokePts + petPts) * wSP)));
-
       const frictions = [];
       if (me.city !== them.city) frictions.push(`Different target cities (${me.city} vs ${them.city})`);
       if (sleepRatio < 0.5) frictions.push(`Sleep clash (${me.sleep_schedule} vs ${them.sleep_schedule})`);
@@ -123,16 +161,10 @@
 
     function buildVibeQuestions(me, them, frictions) {
       const qs = [];
-      if (me.sleep_schedule !== them.sleep_schedule) {
-        qs.push(`Since you are "${me.sleep_schedule}" and they are "${them.sleep_schedule}", how will you handle calls or kitchen noise after 11 PM?`);
-      } else {
-        qs.push('How do you want to split recurring expenses like cook, maid, RO water, and WiFi?');
-      }
-      if (them.pet_preference.startsWith('Has a')) {
-        qs.push(`How will pet care and society pet permissions be managed for their ${them.pet_preference.replace('Has a ', '')}?`);
-      } else {
-        qs.push('What are your boundaries around weekend guests, house parties, and WFH calls?');
-      }
+      if (me.sleep_schedule !== them.sleep_schedule) qs.push(`Since you are "${me.sleep_schedule}" and they are "${them.sleep_schedule}", how will you handle calls or kitchen noise after 11 PM?`);
+      else qs.push('How do you want to split recurring expenses like cook, maid, RO water, and WiFi?');
+      if (them.pet_preference.startsWith('Has a')) qs.push(`How will pet care and society pet permissions be managed for their ${them.pet_preference.replace('Has a ', '')}?`);
+      else qs.push('What are your boundaries around weekend guests, house parties, and WFH calls?');
       qs.push('Before signing the 11-month agreement, how will you split the security deposit and handle early exit notice?');
       return { frictions: frictions.length ? frictions : ['No major lifestyle clashes — confirm guest & cook split rules.'], questions: qs };
     }
@@ -146,8 +178,7 @@
       const [err, setErr] = useState(null);
 
       const handleEmailAuth = async (e) => {
-        e.preventDefault();
-        setLoading(true); setErr(null); setMsg(null);
+        e.preventDefault(); setLoading(true); setErr(null); setMsg(null);
         try {
           if (mode === 'login') {
             const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -178,32 +209,25 @@
             {err && <div className="p-3 rounded-xl bg-[#141414] border border-[#FF6B00] text-xs text-white">{err}</div>}
             {msg && <div className="p-3 rounded-xl bg-[#141414] border border-white text-xs text-white">{msg}</div>}
             <form onSubmit={handleEmailAuth} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-[#C0C0C0] mb-1">Email</label>
-                <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.in" className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 focus:border-[#FF6B00] outline-none text-sm text-white" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-[#C0C0C0] mb-1">Password</label>
-                <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 6 characters" className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 focus:border-[#FF6B00] outline-none text-sm text-white" />
-              </div>
-              <button type="submit" disabled={loading} className="w-full py-3 rounded-xl bg-[#FF6B00] hover:bg-[#e56000] text-white text-sm font-extrabold transition disabled:opacity-60">
-                {loading ? 'Please wait...' : (mode === 'login' ? 'Enter Make my Mate' : 'Create Account')}
-              </button>
+              <div><label className="block text-xs font-semibold text-[#C0C0C0] mb-1">Email</label><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.in" className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 focus:border-[#FF6B00] outline-none text-sm text-white" /></div>
+              <div><label className="block text-xs font-semibold text-[#C0C0C0] mb-1">Password</label><input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Minimum 6 characters" className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 focus:border-[#FF6B00] outline-none text-sm text-white" /></div>
+              <button type="submit" disabled={loading} className="w-full py-3 rounded-xl bg-[#FF6B00] hover:bg-[#e56000] text-white text-sm font-extrabold transition disabled:opacity-60">{loading ? 'Please wait...' : (mode === 'login' ? 'Enter Make my Mate' : 'Create Account')}</button>
             </form>
-            <p className="text-center text-[11px] text-[#9E9E9E] pt-1">
-              By continuing, you agree to our <a href="privacy.html" className="text-[#FF6B00] underline font-semibold">Privacy Policy &amp; Data Terms</a>.
-            </p>
+            <p className="text-center text-[11px] text-[#9E9E9E] pt-1">By continuing, you agree to our <a href="privacy.html" className="text-[#FF6B00] underline font-semibold">Privacy Policy &amp; Data Terms</a>.</p>
           </div>
         </div>
       );
     }
 
     function OnboardingWizard({ session, onCompleted }) {
+      const uid = session.user.id;
       const [fullName, setFullName] = useState('');
       const [age, setAge] = useState(25);
       const [gender, setGender] = useState('Male');
       const [occupation, setOccupation] = useState('');
       const [bio, setBio] = useState('Looking for a clean, transparent flatmate before signing an 11-month lease.');
+      const [avatarUrl, setAvatarUrl] = useState(DEFAULT_AVATAR);
+      const [uploading, setUploading] = useState(false);
       const [city, setCity] = useState('Bengaluru');
       const [locality, setLocality] = useState('Koramangala');
       const [minBudget, setMinBudget] = useState(14000);
@@ -216,15 +240,24 @@
       const [saving, setSaving] = useState(false);
       const [err, setErr] = useState(null);
 
+      const handlePickAvatar = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploading(true); setErr(null);
+        try {
+          const url = await compressAndUploadImage(file, uid, 'avatar');
+          setAvatarUrl(url);
+        } catch (ex) { setErr('Photo upload failed: ' + (ex.message || 'Check Storage bucket SQL')); }
+        finally { setUploading(false); }
+      };
+
       const handleSubmit = async (e) => {
         e.preventDefault(); setSaving(true); setErr(null);
         try {
-          const uid = session.user.id;
           const { error: pErr } = await supabase.from('profiles').upsert({
             id: uid, email: session.user.email, full_name: fullName.trim(), age: Number(age), gender,
             occupation: occupation.trim() || 'Working Professional', bio: bio.trim(),
-            avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=600&auto=format&fit=crop&q=80',
-            is_verified: false, is_boosted: false, role: 'user'
+            avatar_url: avatarUrl, is_verified: false, is_boosted: false, role: 'user'
           });
           if (pErr) throw pErr;
           const { error: prefErr } = await supabase.from('lifestyle_preferences').upsert({
@@ -243,27 +276,27 @@
           <form onSubmit={handleSubmit} className="w-full max-w-xl rounded-3xl bg-[#0D0D0D] border border-[#C0C0C0]/25 p-7 space-y-5">
             <BrandLogo size={40} subtitle="Complete your Flatmate Profile (1 minute)" />
             {err && <div className="p-3 rounded-xl bg-[#141414] border border-[#FF6B00] text-xs text-white">{err}</div>}
+            <div className="flex items-center gap-4 p-3 rounded-2xl bg-[#141414] border border-[#C0C0C0]/20">
+              <img src={avatarUrl} alt="Preview" className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6B00] shrink-0" />
+              <div className="flex-1">
+                <p className="text-xs font-bold text-white">Your Profile Photo</p>
+                <p className="text-[11px] text-[#9E9E9E] mb-2">Real photos get 3x more flatmate matches</p>
+                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#FF6B00] text-white text-xs font-bold cursor-pointer">
+                  <SvgIcon name="camera" className="w-3.5 h-3.5" />
+                  <span>{uploading ? 'Uploading...' : 'Upload Photo'}</span>
+                  <input type="file" accept="image/*" onChange={handlePickAvatar} className="hidden" />
+                </label>
+              </div>
+            </div>
             <div className="grid sm:grid-cols-2 gap-3">
               <input required placeholder="Full Name" value={fullName} onChange={(e) => setFullName(e.target.value)} className="px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white" />
               <input required placeholder="Role / Company" value={occupation} onChange={(e) => setOccupation(e.target.value)} className="px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white" />
               <input type="number" min="18" max="65" value={age} onChange={(e) => setAge(e.target.value)} className="px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white" />
-              <select value={gender} onChange={(e) => setGender(e.target.value)} className="px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">
-                <option>Male</option><option>Female</option><option>Non-binary</option>
-              </select>
+              <select value={gender} onChange={(e) => setGender(e.target.value)} className="px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white"><option>Male</option><option>Female</option><option>Non-binary</option></select>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] text-[#9E9E9E] mb-1">City</label>
-                <select value={city} onChange={(e) => { setCity(e.target.value); setLocality(INDIAN_CITIES[e.target.value][0]); }} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">
-                  {Object.keys(INDIAN_CITIES).map((c) => <option key={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-[11px] text-[#9E9E9E] mb-1">Locality</label>
-                <select value={locality} onChange={(e) => setLocality(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">
-                  {INDIAN_CITIES[city].map((l) => <option key={l}>{l}</option>)}
-                </select>
-              </div>
+              <div><label className="block text-[11px] text-[#9E9E9E] mb-1">City</label><select value={city} onChange={(e) => { setCity(e.target.value); setLocality(INDIAN_CITIES[e.target.value][0]); }} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">{Object.keys(INDIAN_CITIES).map((c) => <option key={c}>{c}</option>)}</select></div>
+              <div><label className="block text-[11px] text-[#9E9E9E] mb-1">Locality</label><select value={locality} onChange={(e) => setLocality(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white">{INDIAN_CITIES[city].map((l) => <option key={l}>{l}</option>)}</select></div>
             </div>
             <div>
               <label className="block text-[11px] text-[#9E9E9E] mb-1">Monthly Budget: ₹{Number(minBudget).toLocaleString('en-IN')} – ₹{Number(maxBudget).toLocaleString('en-IN')}</label>
@@ -279,10 +312,8 @@
               <select value={petPreference} onChange={(e) => setPetPreference(e.target.value)} className="px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white"><option>No Pets</option><option>Pet Friendly</option><option>Has a Dog</option><option>Has a Cat</option></select>
             </div>
             <textarea rows="2" value={bio} onChange={(e) => setBio(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs text-white" />
-            <label className="flex items-center gap-2 text-xs text-white cursor-pointer">
-              <input type="checkbox" checked={hasRoom} onChange={(e) => setHasRoom(e.target.checked)} className="accent-[#FF6B00]" />I already have a flat/room shortlisted
-            </label>
-            <button type="submit" disabled={saving} className="w-full py-3 rounded-xl bg-[#FF6B00] hover:bg-[#e56000] text-white text-sm font-extrabold">{saving ? 'Saving Profile...' : 'Launch Discover Deck'}</button>
+            <label className="flex items-center gap-2 text-xs text-white cursor-pointer"><input type="checkbox" checked={hasRoom} onChange={(e) => setHasRoom(e.target.checked)} className="accent-[#FF6B00]" />I already have a flat/room shortlisted</label>
+            <button type="submit" disabled={saving || uploading} className="w-full py-3 rounded-xl bg-[#FF6B00] hover:bg-[#e56000] text-white text-sm font-extrabold disabled:opacity-60">{saving ? 'Saving Profile...' : 'Launch Discover Deck'}</button>
           </form>
         </div>
       );
@@ -302,14 +333,26 @@
       const [kycQueue, setKycQueue] = useState([]);
       const [weights, setWeights] = useState({ location_budget_weight: 35, sleep_weight: 25, cleanliness_weight: 20, smoking_pets_weight: 20 });
 
+      // Smooth swipe drag + optimistic swiped IDs
+      const [optimisticSwiped, setOptimisticSwiped] = useState([]);
+      const [dragX, setDragX] = useState(0);
+      const startXRef = useRef(null);
+      const chatEndRef = useRef(null);
+
+      // Notifications & Toasts
+      const [notifPerm, setNotifPerm] = useState(() => ('Notification' in window ? Notification.permission : 'denied'));
+      const [toast, setToast] = useState(null);
+      const [unreadCount, setUnreadCount] = useState(0);
+
       const [cityFilter, setCityFilter] = useState('All');
       const [compareItem, setCompareItem] = useState(null);
       const [vibeOutput, setVibeOutput] = useState(null);
       const [matchPopup, setMatchPopup] = useState(null);
       const [showAccountModal, setShowAccountModal] = useState(false);
+      const [uploadingAvatar, setUploadingAvatar] = useState(false);
+      const [accountMsg, setAccountMsg] = useState(null);
       const [confirmDelete, setConfirmDelete] = useState(false);
       const [deleting, setDeleting] = useState(false);
-      const [deleteErr, setDeleteErr] = useState(null);
 
       const [activeMatchId, setActiveMatchId] = useState(null);
       const [messages, setMessages] = useState([]);
@@ -329,6 +372,23 @@
       const [flatBhk, setFlatBhk] = useState('2BHK');
       const [flatRent, setFlatRent] = useState(44000);
       const [flatDeposit, setFlatDeposit] = useState(120000);
+      const [flatImgUrl, setFlatImgUrl] = useState('');
+      const [uploadingFlatImg, setUploadingFlatImg] = useState(false);
+
+      const pushNotification = (title, body, targetTab = 'matches') => {
+        setToast({ id: Date.now(), title, body, targetTab });
+        fireDeviceNotification(title, body);
+        setTimeout(() => setToast((prev) => (prev && Date.now() - prev.id >= 5500 ? null : prev)), 6000);
+      };
+
+      const requestNotifPermission = async () => {
+        if (!('Notification' in window)) return;
+        const perm = await Notification.requestPermission();
+        setNotifPerm(perm);
+        if (perm === 'granted') {
+          pushNotification('Alerts Enabled!', 'You will now get instant notifications for new matches & messages.', tab);
+        }
+      };
 
       const loadAll = async () => {
         const [{ data: pData }, { data: prData }, { data: sData }, { data: mData }, { data: lData }, { data: aData }, { data: kData }] = await Promise.all([
@@ -353,35 +413,77 @@
 
       useEffect(() => { loadAll(); }, [uid]);
 
+      // Global Realtime Notification Listeners (Matches, Messages, KYC Verified)
+      useEffect(() => {
+        const channel = supabase.channel(`global-notifs-${uid}`)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches' }, (payload) => {
+            const m = payload.new;
+            if (m.user_a_id === uid || m.user_b_id === uid) {
+              setUnreadCount((c) => c + 1);
+              setActiveMatchId(m.id);
+              pushNotification("It's a Flatmate Match!", 'You have a new compatible flatmate match. Tap to start chatting!', 'matches');
+              loadAll();
+            }
+          })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+            const msg = payload.new;
+            if (msg.sender_id !== uid) {
+              setUnreadCount((c) => c + 1);
+              const label = msg.message_type === 'meetup_invite' ? 'New Meetup Invite' : 'New Flatmate Message';
+              pushNotification(label, msg.content, 'matches');
+              if (activeMatchId === msg.match_id) {
+                setMessages((prev) => (prev.some((x) => x.id === msg.id) ? prev : [...prev, msg]));
+              }
+            }
+          })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${uid}` }, (payload) => {
+            if (payload.new.is_verified && (!payload.old || !payload.old.is_verified)) {
+              pushNotification('ID Verified!', 'You earned the Orange Verified Shield.', 'discover');
+              loadAll();
+            }
+          })
+          .subscribe();
+
+        return () => { supabase.removeChannel(channel); };
+      }, [uid, activeMatchId]);
+
       useEffect(() => {
         if (!activeMatchId) return;
-        supabase.from('messages').select('*').eq('match_id', activeMatchId).order('created_at', { ascending: true }).then(({ data }) => setMessages(data || []));
-        const channel = supabase.channel(`room-${activeMatchId}`)
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `match_id=eq.${activeMatchId}` }, (p) => setMessages((prev) => [...prev, p.new]))
-          .subscribe();
-        return () => { supabase.removeChannel(channel); };
+        supabase.from('messages').select('*').eq('match_id', activeMatchId).order('created_at', { ascending: true })
+          .then(({ data }) => setMessages(data || []));
       }, [activeMatchId]);
+
+      useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, [messages.length, tab]);
 
       const discoverFeed = useMemo(() => {
         if (!myPrefs) return [];
-        const swipedIds = new Set(swipes.map((s) => s.target_id));
+        const swipedIds = new Set([...swipes.map((s) => s.target_id), ...optimisticSwiped]);
         return profiles
           .filter((p) => p.id !== uid && !swipedIds.has(p.id) && prefsMap[p.id])
           .filter((p) => cityFilter === 'All' || prefsMap[p.id].city === cityFilter)
           .map((p) => ({ profile: p, prefs: prefsMap[p.id], comp: computeCompatibility(myPrefs, prefsMap[p.id], weights) }))
           .sort((a, b) => (a.profile.is_boosted !== b.profile.is_boosted ? (a.profile.is_boosted ? -1 : 1) : b.comp.totalScore - a.comp.totalScore));
-      }, [profiles, prefsMap, swipes, myPrefs, weights, cityFilter, uid]);
+      }, [profiles, prefsMap, swipes, optimisticSwiped, myPrefs, weights, cityFilter, uid]);
 
       if (loading) return <div className="min-h-screen bg-black flex items-center justify-center"><p className="text-sm font-bold text-[#FF6B00]">Loading Make my Mate...</p></div>;
       if (!myProfile || !myPrefs) return <OnboardingWizard session={session} onCompleted={loadAll} />;
 
       const handleSwipe = async (target, direction) => {
+        if (!target) return;
+        setDragX(0);
+        setOptimisticSwiped((prev) => [...prev, target.profile.id]);
         await supabase.from('swipes').upsert({ swiper_id: uid, target_id: target.profile.id, direction, compatibility_score: target.comp.totalScore });
         if (direction === 'like' || direction === 'super') {
           const { data: mutual } = await supabase.from('swipes').select('id').eq('swiper_id', target.profile.id).eq('target_id', uid).in('direction', ['like', 'super']).maybeSingle();
           if (mutual) {
             const { data: newMatch } = await supabase.from('matches').insert({ user_a_id: uid, user_b_id: target.profile.id, pipeline_stage: 1 }).select().single();
-            if (newMatch) { setMatchPopup({ match: newMatch, partner: target }); setActiveMatchId(newMatch.id); }
+            if (newMatch) {
+              setMatchPopup({ match: newMatch, partner: target });
+              setActiveMatchId(newMatch.id);
+              fireDeviceNotification("It's a Flatmate Match!", `You and ${target.profile.full_name} matched at ${target.comp.totalScore}%!`);
+            }
           }
         }
         loadAll();
@@ -389,12 +491,39 @@
 
       const sendChatMessage = async (content, type = 'text', metadata = {}) => {
         if (!activeMatchId || !content.trim()) return;
-        await supabase.from('messages').insert({ match_id: activeMatchId, sender_id: uid, content: content.trim(), message_type: type, metadata });
+        const text = content.trim();
         setDraftMsg('');
+        const { data } = await supabase.from('messages').insert({ match_id: activeMatchId, sender_id: uid, content: text, message_type: type, metadata }).select().single();
+        if (data) setMessages((prev) => (prev.some((x) => x.id === data.id) ? prev : [...prev, data]));
+      };
+
+      const handleUpdateAvatar = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploadingAvatar(true); setAccountMsg(null);
+        try {
+          const url = await compressAndUploadImage(file, uid, 'avatar');
+          const { error } = await supabase.from('profiles').update({ avatar_url: url }).eq('id', uid);
+          if (error) throw error;
+          setAccountMsg('Profile photo updated!');
+          loadAll();
+        } catch (ex) { setAccountMsg('Upload error: ' + (ex.message || 'Check Storage SQL')); }
+        finally { setUploadingAvatar(false); }
+      };
+
+      const handleUploadFlatPhoto = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploadingFlatImg(true);
+        try {
+          const url = await compressAndUploadImage(file, uid, 'flat');
+          setFlatImgUrl(url);
+        } catch (ex) { setToast({ id: Date.now(), title: 'Upload failed', body: ex.message, targetTab: 'flats' }); }
+        finally { setUploadingFlatImg(false); }
       };
 
       const handleDeleteAccount = async () => {
-        setDeleting(true); setDeleteErr(null);
+        setDeleting(true); setAccountMsg(null);
         try {
           const { error: rpcErr } = await supabase.rpc('delete_my_account');
           if (rpcErr) {
@@ -403,7 +532,7 @@
           }
           await supabase.auth.signOut();
           setShowAccountModal(false);
-        } catch (ex) { setDeleteErr(ex.message || 'Could not delete account.'); setDeleting(false); }
+        } catch (ex) { setAccountMsg(ex.message || 'Could not delete account.'); setDeleting(false); }
       };
 
       const activeMatch = matches.find((m) => m.id === activeMatchId) || matches[0];
@@ -414,17 +543,40 @@
 
       return (
         <div className="min-h-screen bg-black text-white flex flex-col">
+          {/* Floating Live Toast Notification */}
+          {toast && (
+            <button
+              onClick={() => { setTab(toast.targetTab); setUnreadCount(0); setToast(null); }}
+              className="fixed top-4 right-4 z-50 max-w-xs text-left p-3.5 rounded-2xl bg-[#141414] border-2 border-[#FF6B00] shadow-2xl space-y-1 transition-all"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-[#FF6B00]">{toast.title}</span>
+                <span className="text-[10px] text-[#9E9E9E]">Tap to open</span>
+              </div>
+              <p className="text-xs text-white line-clamp-2">{toast.body}</p>
+            </button>
+          )}
+
           <header className="sticky top-0 z-40 bg-[#0D0D0D]/95 backdrop-blur border-b border-[#C0C0C0]/20">
             <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
               <BrandLogo size={36} subtitle="Compatible Flatmates Before Signing" />
               <div className="flex items-center gap-2">
+                <button
+                  onClick={requestNotifPermission}
+                  title="Notifications"
+                  className={`relative p-2 rounded-xl border text-xs font-bold flex items-center gap-1 ${notifPerm === 'granted' ? 'bg-[#141414] border-[#C0C0C0]/25 text-[#FF6B00]' : 'bg-[#FF6B00] border-[#FF6B00] text-white'}`}
+                >
+                  <SvgIcon name="bell" className="w-4 h-4" />
+                  {notifPerm !== 'granted' && <span className="hidden sm:inline text-[11px]">Enable Alerts</span>}
+                  {unreadCount > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-white text-black text-[10px] font-extrabold flex items-center justify-center">{unreadCount}</span>}
+                </button>
                 {myProfile.role === 'admin' && (
                   <button onClick={() => setTab(tab === 'admin' ? 'discover' : 'admin')} className={`px-3 py-1.5 rounded-full text-xs font-bold border ${tab === 'admin' ? 'bg-[#FF6B00] border-[#FF6B00] text-white' : 'bg-[#141414] border-[#C0C0C0]/30 text-white'}`}>
-                    {tab === 'admin' ? 'User App' : 'Admin Console'}
+                    {tab === 'admin' ? 'User App' : 'Admin'}
                   </button>
                 )}
-                <button onClick={() => { setShowAccountModal(true); setConfirmDelete(false); setDeleteErr(null); }} title="My Account & Privacy" className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#141414] border border-[#C0C0C0]/25 hover:border-[#FF6B00] text-xs font-bold text-white">
-                  <SvgIcon name={myProfile.is_verified ? 'shield' : 'user'} className={`w-4 h-4 ${myProfile.is_verified ? 'text-[#FF6B00]' : 'text-[#C0C0C0]'}`} />
+                <button onClick={() => { setShowAccountModal(true); setConfirmDelete(false); setAccountMsg(null); }} className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-[#141414] border border-[#C0C0C0]/25 hover:border-[#FF6B00] text-xs font-bold text-white">
+                  <img src={myProfile.avatar_url || DEFAULT_AVATAR} className="w-6 h-6 rounded-full object-cover" />
                   <span className="hidden sm:inline">{myProfile.full_name}</span>
                 </button>
                 <button onClick={onSignOut} title="Sign Out" className="p-2 rounded-xl bg-[#141414] border border-[#C0C0C0]/25 text-[#C0C0C0] hover:text-white hover:border-[#FF6B00]"><SvgIcon name="logout" className="w-4 h-4" /></button>
@@ -433,13 +585,17 @@
             {tab !== 'admin' && (
               <div className="max-w-7xl mx-auto px-4 pb-2.5 flex items-center gap-2 overflow-x-auto">
                 {[
-                  { id: 'discover', label: 'Discover Deck', icon: 'flame', count: discoverFeed.length },
-                  { id: 'matches', label: '4-Stage Matches & Chat', icon: 'chat', count: matches.length },
-                  { id: 'flats', label: 'Verified Flats & Boosts', icon: 'building', count: listings.filter((l) => l.status === 'active').length },
+                  { id: 'discover', label: 'Discover', icon: 'flame', count: discoverFeed.length },
+                  { id: 'matches', label: '4-Stage Chat', icon: 'chat', count: matches.length, badge: unreadCount },
+                  { id: 'flats', label: 'Verified Flats', icon: 'building', count: listings.filter((l) => l.status === 'active').length },
                 ].map((item) => (
-                  <button key={item.id} onClick={() => setTab(item.id)} className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition ${tab === item.id ? 'bg-[#FF6B00] text-white' : 'bg-[#141414] border border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>
+                  <button
+                    key={item.id}
+                    onClick={() => { setTab(item.id); if (item.id === 'matches') setUnreadCount(0); }}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap transition ${tab === item.id ? 'bg-[#FF6B00] text-white' : 'bg-[#141414] border border-[#C0C0C0]/25 text-[#C0C0C0]'}`}
+                  >
                     <SvgIcon name={item.icon} className="w-3.5 h-3.5" /><span>{item.label}</span>
-                    <span className="px-1.5 py-0.5 rounded-full bg-black/40 text-[10px]">{item.count}</span>
+                    <span className="px-1.5 py-0.5 rounded-full bg-black/40 text-[10px]">{item.badge > 0 ? `${item.badge} new` : item.count}</span>
                   </button>
                 ))}
               </div>
@@ -448,8 +604,8 @@
 
           {tab === 'discover' && (
             <main className="max-w-5xl mx-auto w-full px-4 py-6">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-                <div><h2 className="text-xl font-extrabold">Discover Compatible Flatmates</h2><p className="text-xs text-[#9E9E9E]">Compare habits before signing an 11-month agreement</p></div>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+                <div><h2 className="text-xl font-extrabold">Discover Compatible Flatmates</h2><p className="text-xs text-[#9E9E9E]">Drag card right to Match or left to Pass</p></div>
                 <div className="flex flex-wrap gap-1.5">
                   {['All', 'Bengaluru', 'Pune', 'Mumbai', 'Delhi NCR'].map((c) => (
                     <button key={c} onClick={() => setCityFilter(c)} className={`px-3 py-1 rounded-full text-xs font-bold border ${cityFilter === c ? 'bg-[#FF6B00] border-[#FF6B00] text-white' : 'bg-[#141414] border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>{c}</button>
@@ -459,9 +615,18 @@
               <div className="max-w-md mx-auto">
                 {discoverFeed[0] ? (
                   <div>
-                    <div className={`rounded-3xl bg-[#0D0D0D] overflow-hidden shadow-2xl ${discoverFeed[0].profile.is_boosted ? 'border-2 border-[#FF6B00]' : 'border border-[#C0C0C0]/30'}`}>
+                    <div
+                      onPointerDown={(e) => { startXRef.current = e.clientX; }}
+                      onPointerMove={(e) => { if (startXRef.current !== null) setDragX(e.clientX - startXRef.current); }}
+                      onPointerUp={() => { if (startXRef.current === null) return; if (dragX > 90) handleSwipe(discoverFeed[0], 'like'); else if (dragX < -90) handleSwipe(discoverFeed[0], 'pass'); else setDragX(0); startXRef.current = null; }}
+                      onPointerLeave={() => { startXRef.current = null; setDragX(0); }}
+                      style={{ transform: `translateX(${dragX}px) rotate(${dragX * 0.035}deg)`, transition: startXRef.current === null ? 'transform 0.22s ease' : 'none' }}
+                      className={`relative rounded-3xl bg-[#0D0D0D] overflow-hidden shadow-2xl select-none touch-pan-y ${discoverFeed[0].profile.is_boosted ? 'border-2 border-[#FF6B00]' : 'border border-[#C0C0C0]/30'}`}
+                    >
+                      {dragX > 35 && <div className="absolute top-6 left-6 z-20 px-4 py-1.5 rounded-xl bg-[#FF6B00] text-white font-extrabold text-sm">MATCH</div>}
+                      {dragX < -35 && <div className="absolute top-6 right-6 z-20 px-4 py-1.5 rounded-xl bg-black border border-white text-white font-extrabold text-sm">PASS</div>}
                       <div className="relative h-80 bg-[#141414]">
-                        <img src={discoverFeed[0].profile.avatar_url} alt={discoverFeed[0].profile.full_name} className="w-full h-full object-cover" />
+                        <img src={discoverFeed[0].profile.avatar_url || DEFAULT_AVATAR} alt={discoverFeed[0].profile.full_name} draggable={false} className="w-full h-full object-cover" />
                         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
                         <div className="absolute top-4 inset-x-4 flex justify-between items-center">
                           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FF6B00] text-white text-xs font-extrabold"><SvgIcon name="flame" className="w-3.5 h-3.5" />{discoverFeed[0].comp.totalScore}% Match</span>
@@ -488,15 +653,15 @@
                       </div>
                     </div>
                     <div className="flex justify-center items-center gap-5 mt-6">
-                      <button onClick={() => handleSwipe(discoverFeed[0], 'pass')} className="w-14 h-14 rounded-full bg-[#141414] border border-[#C0C0C0]/40 flex items-center justify-center"><SvgIcon name="x" className="w-6 h-6 text-[#C0C0C0]" /></button>
-                      <button onClick={() => handleSwipe(discoverFeed[0], 'super')} className="w-12 h-12 rounded-full bg-black border border-[#FF6B00] text-[#FF6B00] flex items-center justify-center"><SvgIcon name="star" className="w-5 h-5" /></button>
-                      <button onClick={() => handleSwipe(discoverFeed[0], 'like')} className="w-16 h-16 rounded-full bg-[#FF6B00] text-white flex items-center justify-center shadow-[0_0_25px_rgba(255,107,0,0.45)]"><SvgIcon name="heart" className="w-7 h-7" /></button>
+                      <button onClick={() => handleSwipe(discoverFeed[0], 'pass')} className="w-14 h-14 rounded-full bg-[#141414] border border-[#C0C0C0]/40 active:scale-95 transition flex items-center justify-center"><SvgIcon name="x" className="w-6 h-6 text-[#C0C0C0]" /></button>
+                      <button onClick={() => handleSwipe(discoverFeed[0], 'super')} className="w-12 h-12 rounded-full bg-black border border-[#FF6B00] text-[#FF6B00] active:scale-95 transition flex items-center justify-center"><SvgIcon name="star" className="w-5 h-5" /></button>
+                      <button onClick={() => handleSwipe(discoverFeed[0], 'like')} className="w-16 h-16 rounded-full bg-[#FF6B00] text-white active:scale-95 transition flex items-center justify-center shadow-[0_0_25px_rgba(255,107,0,0.45)]"><SvgIcon name="heart" className="w-7 h-7" /></button>
                     </div>
                   </div>
                 ) : (
                   <div className="p-10 rounded-3xl bg-[#0D0D0D] border border-[#C0C0C0]/25 text-center space-y-3">
                     <p className="text-base font-bold">No more profiles in this filter</p>
-                    <p className="text-xs text-[#9E9E9E]">Your profile is live! Share Make my Mate with flatmates or post a flat in Verified Flats.</p>
+                    <p className="text-xs text-[#9E9E9E]">Share Make my Mate with friends or check Verified Flats.</p>
                   </div>
                 )}
               </div>
@@ -511,20 +676,20 @@
                 {matches.map((m) => {
                   const partner = profiles.find((p) => p.id === (m.user_a_id === uid ? m.user_b_id : m.user_a_id));
                   return (
-                    <button key={m.id} onClick={() => setActiveMatchId(m.id)} className={`w-full p-3 rounded-xl flex items-center gap-3 text-left border ${m.id === activeMatch?.id ? 'bg-[#141414] border-[#FF6B00]' : 'bg-black border-[#C0C0C0]/20'}`}>
-                      <img src={partner?.avatar_url || ''} className="w-10 h-10 rounded-full object-cover" />
+                    <button key={m.id} onClick={() => { setActiveMatchId(m.id); setUnreadCount(0); }} className={`w-full p-3 rounded-xl flex items-center gap-3 text-left border ${m.id === activeMatch?.id ? 'bg-[#141414] border-[#FF6B00]' : 'bg-black border-[#C0C0C0]/20'}`}>
+                      <img src={partner?.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full object-cover" />
                       <div className="min-w-0 flex-1"><p className="text-xs font-bold truncate">{partner?.full_name || 'Flatmate'}</p><p className="text-[10px] text-[#FF6B00]">Stage {m.pipeline_stage}/4</p></div>
                     </button>
                   );
                 })}
               </div>
-              <div className="lg:col-span-8 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/25 flex flex-col min-h-[580px] overflow-hidden">
+              <div className="lg:col-span-8 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/25 flex flex-col min-h-[560px] max-h-[78vh] overflow-hidden">
                 {activeMatch && activePartner ? (
                   <>
                     <div className="p-4 bg-[#141414] border-b border-[#C0C0C0]/20 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5">
-                          <img src={activePartner.avatar_url} className="w-10 h-10 rounded-full object-cover border border-[#FF6B00]" />
+                          <img src={activePartner.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full object-cover border border-[#FF6B00]" />
                           <div><h3 className="text-sm font-extrabold flex items-center gap-1.5">{activePartner.full_name}{activePartner.is_verified && <SvgIcon name="shield" className="w-4 h-4 text-[#FF6B00]" />}</h3><p className="text-[11px] text-[#9E9E9E]">{activePartner.occupation}</p></div>
                         </div>
                         <div className="flex gap-2">
@@ -541,7 +706,7 @@
                       </div>
                     </div>
                     {showKycModal && (
-                      <form onSubmit={async (e) => { e.preventDefault(); const masked = kycDocType === 'Aadhaar' ? `XXXX-XXXX-${kycDocVal.slice(-4)}` : `${kycDocVal.slice(0, 4)}****`; await supabase.from('kyc_verifications').insert({ user_id: uid, doc_type: kycDocType, doc_number_masked: masked, status: 'pending' }); setShowKycModal(false); setKycDocVal(''); loadAll(); }} className="p-3 bg-black border-b border-[#FF6B00]/40 flex flex-wrap gap-2">
+                      <form onSubmit={async (e) => { e.preventDefault(); const masked = kycDocType === 'Aadhaar' ? `XXXX-XXXX-${kycDocVal.slice(-4)}` : `${kycDocVal.slice(0, 4)}****`; await supabase.from('kyc_verifications').insert({ user_id: uid, doc_type: kycDocType, doc_number_masked: masked, status: 'pending' }); setShowKycModal(false); setKycDocVal(''); setToast({ id: Date.now(), title: 'KYC Submitted', body: 'Admin will review and unlock your Orange Verified Shield.', targetTab: 'matches' }); loadAll(); }} className="p-3 bg-black border-b border-[#FF6B00]/40 flex flex-wrap gap-2">
                         <select value={kycDocType} onChange={(e) => setKycDocType(e.target.value)} className="px-3 py-1.5 rounded-lg bg-[#141414] border border-[#C0C0C0]/30 text-xs"><option>Aadhaar</option><option>PAN</option><option>WorkEmail</option></select>
                         <input required value={kycDocVal} onChange={(e) => setKycDocVal(e.target.value)} placeholder="Last 4 digits / PAN / Work Email" className="flex-1 px-3 py-1.5 rounded-lg bg-[#141414] border border-[#C0C0C0]/30 text-xs" />
                         <button type="submit" className="px-4 py-1.5 rounded-lg bg-[#FF6B00] text-xs font-bold">Submit KYC</button>
@@ -564,6 +729,7 @@
                           </div>
                         </div>
                       ))}
+                      <div ref={chatEndRef} />
                     </div>
                     {activeMatch.pipeline_stage === 4 && (
                       <div className="p-4 bg-[#141414] border-t border-[#FF6B00] space-y-2.5">
@@ -598,25 +764,38 @@
                 </div>
               </div>
               {showFlatForm && (
-                <form onSubmit={async (e) => { e.preventDefault(); const div = flatBhk === '3BHK' ? 3 : 2; await supabase.from('verified_listings').insert({ owner_id: uid, title: flatTitle, city: flatCity, locality: flatLocality, bhk_type: flatBhk, total_rent: Number(flatRent), per_person_rent: Math.round(Number(flatRent) / div), security_deposit: Number(flatDeposit), amenities: ['High-Speed WiFi', 'Cook + Maid'], is_verified: false, status: 'active' }); setFlatTitle(''); setShowFlatForm(false); loadAll(); }} className="p-5 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 grid sm:grid-cols-3 gap-3">
-                  <input required placeholder="Listing Title" value={flatTitle} onChange={(e) => setFlatTitle(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
-                  <select value={flatCity} onChange={(e) => setFlatCity(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs">{Object.keys(INDIAN_CITIES).map((c) => <option key={c}>{c}</option>)}</select>
-                  <input required placeholder="Locality" value={flatLocality} onChange={(e) => setFlatLocality(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
-                  <select value={flatBhk} onChange={(e) => setFlatBhk(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs"><option>2BHK</option><option>3BHK</option></select>
-                  <input type="number" required value={flatRent} onChange={(e) => setFlatRent(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
-                  <button type="submit" className="px-4 py-2 rounded-lg bg-[#FF6B00] text-xs font-bold">Publish Listing</button>
+                <form onSubmit={async (e) => { e.preventDefault(); const div = flatBhk === '3BHK' ? 3 : 2; await supabase.from('verified_listings').insert({ owner_id: uid, title: flatTitle, city: flatCity, locality: flatLocality, bhk_type: flatBhk, total_rent: Number(flatRent), per_person_rent: Math.round(Number(flatRent) / div), security_deposit: Number(flatDeposit), amenities: ['High-Speed WiFi', 'Cook + Maid'], image_url: flatImgUrl, is_verified: false, status: 'active' }); setFlatTitle(''); setFlatImgUrl(''); setShowFlatForm(false); loadAll(); }} className="p-5 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 space-y-3">
+                  <div className="grid sm:grid-cols-3 gap-3">
+                    <input required placeholder="Listing Title" value={flatTitle} onChange={(e) => setFlatTitle(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                    <select value={flatCity} onChange={(e) => setFlatCity(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs">{Object.keys(INDIAN_CITIES).map((c) => <option key={c}>{c}</option>)}</select>
+                    <input required placeholder="Locality" value={flatLocality} onChange={(e) => setFlatLocality(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                    <select value={flatBhk} onChange={(e) => setFlatBhk(e.target.value)} className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs"><option>2BHK</option><option>3BHK</option></select>
+                    <input type="number" required value={flatRent} onChange={(e) => setFlatRent(e.target.value)} placeholder="Total Monthly Rent" className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                    <input type="number" required value={flatDeposit} onChange={(e) => setFlatDeposit(e.target.value)} placeholder="Security Deposit" className="px-3 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#141414] border border-[#C0C0C0]/30 text-xs font-bold cursor-pointer">
+                      <SvgIcon name="camera" className="w-4 h-4 text-[#FF6B00]" />
+                      <span>{uploadingFlatImg ? 'Uploading photo...' : (flatImgUrl ? 'Flat Photo Added ✓' : 'Add Room Photo (Optional)')}</span>
+                      <input type="file" accept="image/*" onChange={handleUploadFlatPhoto} className="hidden" />
+                    </label>
+                    <button type="submit" disabled={uploadingFlatImg} className="px-5 py-2 rounded-lg bg-[#FF6B00] text-xs font-extrabold">Publish Listing</button>
+                  </div>
                 </form>
               )}
               <div className="grid md:grid-cols-2 gap-4">
                 {listings.filter((l) => l.status === 'active').map((l) => (
-                  <div key={l.id} className="p-5 rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/25 space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div><span className="px-2 py-0.5 rounded bg-white text-black text-[10px] font-extrabold">{l.bhk_type}</span><h3 className="text-base font-extrabold mt-2">{l.title}</h3><p className="text-xs text-[#9E9E9E] mt-1">{l.locality}, {l.city}</p></div>
-                      <div className="text-right"><p className="text-[10px] text-[#9E9E9E]">PER PERSON</p><p className="text-xl font-extrabold text-[#FF6B00]">₹{Number(l.per_person_rent).toLocaleString('en-IN')}</p></div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-black border border-[#C0C0C0]/15 text-xs">
-                      <div><span className="text-[10px] text-[#9E9E9E] block">Total Rent</span>₹{Number(l.total_rent).toLocaleString('en-IN')}</div>
-                      <div><span className="text-[10px] text-[#9E9E9E] block">Deposit</span>₹{Number(l.security_deposit).toLocaleString('en-IN')}</div>
+                  <div key={l.id} className="rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/25 overflow-hidden">
+                    {l.image_url && <img src={l.image_url} alt={l.title} className="w-full h-44 object-cover border-b border-[#C0C0C0]/20" />}
+                    <div className="p-5 space-y-3">
+                      <div className="flex justify-between items-start">
+                        <div><span className="px-2 py-0.5 rounded bg-white text-black text-[10px] font-extrabold">{l.bhk_type}</span><h3 className="text-base font-extrabold mt-2">{l.title}</h3><p className="text-xs text-[#9E9E9E] mt-1">{l.locality}, {l.city}</p></div>
+                        <div className="text-right"><p className="text-[10px] text-[#9E9E9E]">PER PERSON</p><p className="text-xl font-extrabold text-[#FF6B00]">₹{Number(l.per_person_rent).toLocaleString('en-IN')}</p></div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-black border border-[#C0C0C0]/15 text-xs">
+                        <div><span className="text-[10px] text-[#9E9E9E] block">Total Rent</span>₹{Number(l.total_rent).toLocaleString('en-IN')}</div>
+                        <div><span className="text-[10px] text-[#9E9E9E] block">Deposit</span>₹{Number(l.security_deposit).toLocaleString('en-IN')}</div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -652,14 +831,25 @@
                   <h3 className="text-base font-extrabold text-white">My Account &amp; Privacy</h3>
                   <button onClick={() => setShowAccountModal(false)} className="text-[#C0C0C0] hover:text-white"><SvgIcon name="x" className="w-5 h-5" /></button>
                 </div>
-                <div className="p-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/20 space-y-1.5 text-xs">
-                  <p className="font-extrabold text-white text-sm">{myProfile.full_name}, {myProfile.age}</p>
-                  <p className="text-[#C0C0C0]">{myProfile.email}</p>
-                  <p className="text-[#9E9E9E]">{myPrefs.locality}, {myPrefs.city} • ₹{Number(myPrefs.min_budget).toLocaleString('en-IN')}–₹{Number(myPrefs.max_budget).toLocaleString('en-IN')}</p>
+                <div className="flex items-center gap-4 p-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/20">
+                  <img src={myProfile.avatar_url || DEFAULT_AVATAR} className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6B00] shrink-0" />
+                  <div className="min-w-0 flex-1 text-xs space-y-1">
+                    <p className="font-extrabold text-white text-sm truncate">{myProfile.full_name}, {myProfile.age}</p>
+                    <p className="text-[#9E9E9E] truncate">{myPrefs.locality}, {myPrefs.city}</p>
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#FF6B00] text-white text-[11px] font-bold cursor-pointer mt-1">
+                      <SvgIcon name="camera" className="w-3.5 h-3.5" />
+                      <span>{uploadingAvatar ? 'Uploading...' : 'Change Photo'}</span>
+                      <input type="file" accept="image/*" onChange={handleUpdateAvatar} className="hidden" />
+                    </label>
+                  </div>
                 </div>
+                {accountMsg && <p className="text-xs text-[#FF6B00]">{accountMsg}</p>}
+                <button onClick={requestNotifPermission} className="w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-xs font-bold text-white flex items-center justify-center gap-2">
+                  <SvgIcon name="bell" className="w-4 h-4 text-[#FF6B00]" />
+                  {notifPerm === 'granted' ? 'Notifications Enabled ✓' : 'Enable Match & Chat Notifications'}
+                </button>
                 <a href="privacy.html" target="_blank" rel="noopener noreferrer" className="block w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-center text-xs font-bold text-white">View Privacy Policy &amp; Data Terms</a>
                 <div className="pt-3 border-t border-[#C0C0C0]/20 space-y-2.5">
-                  {deleteErr && <p className="text-xs text-[#FF6B00]">{deleteErr}</p>}
                   {!confirmDelete ? (
                     <button onClick={() => setConfirmDelete(true)} className="w-full py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-xs font-bold text-[#C0C0C0] hover:text-white flex items-center justify-center gap-2"><SvgIcon name="trash" className="w-4 h-4 text-[#FF6B00]" />Delete My Account &amp; All Data</button>
                   ) : (
@@ -704,7 +894,7 @@
               <div className="w-full max-w-sm rounded-3xl bg-[#0D0D0D] border-2 border-[#FF6B00] p-6 text-center space-y-4">
                 <h2 className="text-2xl font-extrabold">It&apos;s a Flatmate Match!</h2>
                 <p className="text-xs text-[#C0C0C0]">You and {matchPopup.partner.profile.full_name} matched at {matchPopup.partner.comp.totalScore}%.</p>
-                <button onClick={() => { setMatchPopup(null); setTab('matches'); }} className="w-full py-3 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Open 4-Stage Chat</button>
+                <button onClick={() => { setMatchPopup(null); setTab('matches'); setUnreadCount(0); }} className="w-full py-3 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Open 4-Stage Chat</button>
               </div>
             </div>
           )}
