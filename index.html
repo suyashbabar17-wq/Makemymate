@@ -824,3 +824,101 @@
                 {kycQueue.filter((k) => k.status === 'pending').length === 0 && <p className="text-xs text-[#9E9E9E]">No pending KYC requests right now.</p>}
                 {kycQueue.filter((k) => k.status === 'pending').map((k) => (
                   <div key={k.id} className="p-3 rounded-xl bg-[#141414] flex items-center justify-between">
+                    <span className="text-xs font-bold">{k.doc_type} • {k.doc_number_masked}</span>
+                    <button onClick={async () => { await supabase.from('kyc_verifications').update({ status: 'approved', reviewed_by: uid }).eq('id', k.id); await supabase.from('profiles').update({ is_verified: true }).eq('id', k.user_id); loadAll(); }} className="px-3 py-1.5 rounded-lg bg-[#FF6B00] text-xs font-bold">Approve &amp; Grant Shield</button>
+                  </div>
+                ))}
+              </div>
+            </main>
+          )}
+
+          {showAccountModal && (
+            <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
+              <div className="w-full max-w-md rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 p-6 space-y-4">
+                <div className="flex justify-between items-center"><h3 className="text-base font-extrabold text-white">My Account &amp; Privacy</h3><button onClick={() => setShowAccountModal(false)} className="text-[#C0C0C0] hover:text-white"><SvgIcon name="x" className="w-5 h-5" /></button></div>
+                <div className="flex items-center gap-4 p-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/20">
+                  <img src={myProfile.avatar_url || DEFAULT_AVATAR} className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6B00] shrink-0" />
+                  <div className="min-w-0 flex-1 text-xs space-y-1">
+                    <p className="font-extrabold text-white text-sm truncate">{myProfile.full_name}, {myProfile.age}</p>
+                    <p className="text-[#9E9E9E] truncate">{myPrefs.locality}, {myPrefs.city}</p>
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#FF6B00] text-white text-[11px] font-bold cursor-pointer mt-1">
+                      <SvgIcon name="camera" className="w-3.5 h-3.5" />
+                      <span>{uploadingAvatar ? 'Uploading...' : 'Change Photo'}</span>
+                      <input type="file" accept="image/*" onChange={handleUpdateAvatar} className="hidden" />
+                    </label>
+                  </div>
+                </div>
+                {accountMsg && <p className="text-xs text-[#FF6B00]">{accountMsg}</p>}
+                <button onClick={requestNotifPermission} className="w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-xs font-bold text-white flex items-center justify-center gap-2"><SvgIcon name="bell" className="w-4 h-4 text-[#FF6B00]" />{notifPerm === 'granted' ? 'Notifications Enabled ✓' : 'Enable Match & Chat Notifications'}</button>
+                <a href="privacy.html" target="_blank" rel="noopener noreferrer" className="block w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-center text-xs font-bold text-white">View Privacy Policy &amp; Data Terms</a>
+                <div className="pt-3 border-t border-[#C0C0C0]/20 space-y-2.5">
+                  {!confirmDelete ? (
+                    <button onClick={() => setConfirmDelete(true)} className="w-full py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 hover:border-[#FF6B00] text-xs font-bold text-[#C0C0C0] hover:text-white flex items-center justify-center gap-2"><SvgIcon name="trash" className="w-4 h-4 text-[#FF6B00]" />Delete My Account &amp; All Data</button>
+                  ) : (
+                    <div className="p-3.5 rounded-xl bg-[#141414] border border-[#FF6B00] space-y-3">
+                      <p className="text-xs text-white font-semibold">This permanently deletes your profile, swipes, matches, chats, and KYC records. Are you sure?</p>
+                      <div className="flex gap-2">
+                        <button onClick={() => setConfirmDelete(false)} className="flex-1 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs font-bold text-white">Cancel</button>
+                        <button disabled={deleting} onClick={handleDeleteAccount} className="flex-1 py-2 rounded-lg bg-[#FF6B00] text-xs font-extrabold text-white disabled:opacity-60">{deleting ? 'Deleting...' : 'Confirm Delete'}</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {compareItem && (
+            <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
+              <div className="w-full max-w-lg rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 p-6 space-y-4">
+                <div className="flex justify-between items-center"><h3 className="text-base font-extrabold">You vs. {compareItem.profile.full_name} ({compareItem.comp.totalScore}%)</h3><button onClick={() => setCompareItem(null)} className="text-[#C0C0C0] hover:text-white"><SvgIcon name="x" className="w-5 h-5" /></button></div>
+                <table className="w-full text-xs border border-[#C0C0C0]/20">
+                  <thead className="bg-[#141414] text-[#9E9E9E]"><tr><th className="p-2 text-left">Habit</th><th className="p-2 text-left">You</th><th className="p-2 text-left">Them</th></tr></thead>
+                  <tbody className="divide-y divide-[#C0C0C0]/15">
+                    {[['Sleep', myPrefs.sleep_schedule, compareItem.prefs.sleep_schedule], ['Cleanliness', myPrefs.cleaning_habit, compareItem.prefs.cleaning_habit], ['Smoking', myPrefs.smoking_habit, compareItem.prefs.smoking_habit], ['Pets', myPrefs.pet_preference, compareItem.prefs.pet_preference]].map(([l, a, b]) => (
+                      <tr key={l}><td className="p-2 text-[#9E9E9E]">{l}</td><td className="p-2">{a}</td><td className={`p-2 font-bold ${a === b ? 'text-[#FF6B00]' : ''}`}>{b}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button onClick={() => setVibeOutput(buildVibeQuestions(myPrefs, compareItem.prefs, compareItem.comp.frictions))} className="w-full py-2.5 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Run Pre-Lease Vibe Check</button>
+                {vibeOutput && (
+                  <div className="p-3 rounded-xl bg-[#141414] space-y-2 text-xs">
+                    <p className="font-bold text-[#FF6B00]">Watchouts: {vibeOutput.frictions.join(' • ')}</p>
+                    <ol className="list-decimal list-inside space-y-1 text-[#C0C0C0]">{vibeOutput.questions.map((q) => <li key={q}>{q}</li>)}</ol>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {matchPopup && (
+            <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
+              <div className="w-full max-w-sm rounded-3xl bg-[#0D0D0D] border-2 border-[#FF6B00] p-6 text-center space-y-4">
+                <h2 className="text-2xl font-extrabold">It&apos;s a Flatmate Match!</h2>
+                <p className="text-xs text-[#C0C0C0]">You and {matchPopup.partner.profile.full_name} matched at {matchPopup.partner.comp.totalScore}%.</p>
+                <button onClick={() => { setMatchPopup(null); setTab('matches'); setUnreadCount(0); }} className="w-full py-3 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Open 4-Stage Chat</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function AppRoot() {
+      const [session, setSession] = useState(null);
+      const [booting, setBooting] = useState(true);
+      useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => { setSession(data.session); setBooting(false); });
+        const { data: sub } = supabase.auth.onAuthStateChange((_e, nextSession) => setSession(nextSession));
+        return () => sub.subscription.unsubscribe();
+      }, []);
+      if (booting) return <div className="min-h-screen bg-black flex items-center justify-center text-xs text-[#9E9E9E]">Connecting...</div>;
+      if (!session) return <AuthScreen onAuthSuccess={(s) => setSession(s)} />;
+      return <MainApp session={session} onSignOut={() => supabase.auth.signOut()} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<AppRoot />);
+    if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  </script>
+</body>
+</html>
