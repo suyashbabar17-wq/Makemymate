@@ -123,4 +123,887 @@
           </svg>
         </div>
         <div className="leading-tight">
-          <div className="text-base sm:text-lg
+          <div className="text-base sm:text-lg font-extrabold tracking-tight text-white">Make <span className="text-[#FF6B00]">my</span> Mate</div>
+          {subtitle && <p className="text-[11px] text-[#9E9E9E]">{subtitle}</p>}
+        </div>
+      </div>
+    );
+
+    function computeCompatibility(me, them, weights) {
+      const sum = weights.location_budget_weight + weights.sleep_weight + weights.cleanliness_weight + weights.smoking_pets_weight || 100;
+      let locRatio = me.city === them.city ? (me.locality === them.locality ? 0.55 : 0.45) : 0.1;
+      locRatio += Math.min(me.max_budget, them.max_budget) >= Math.max(me.min_budget, them.min_budget) ? 0.45 : (Math.max(me.min_budget, them.min_budget) - Math.min(me.max_budget, them.max_budget) <= 4000 ? 0.25 : 0.05);
+      const sleepRatio = me.sleep_schedule === them.sleep_schedule ? 1 : (me.sleep_schedule.includes('Balanced') || them.sleep_schedule.includes('Balanced') ? 0.72 : 0.35);
+      const cleanRatio = me.cleaning_habit === them.cleaning_habit ? 1 : (me.cleaning_habit.includes('Daily') && them.cleaning_habit.includes('Weekend') ? 0.4 : 0.75);
+      const smokePts = me.smoking_habit === them.smoking_habit ? 0.5 : (me.smoking_habit === 'No Smoking' && them.smoking_habit === 'Smoker Friendly' ? 0.1 : 0.32);
+      const petConflict = (me.pet_preference.startsWith('Has a') && them.pet_preference === 'No Pets') || (them.pet_preference.startsWith('Has a') && me.pet_preference === 'No Pets');
+      const petPts = me.pet_preference === them.pet_preference ? 0.5 : (petConflict ? 0.1 : 0.42);
+      const totalScore = Math.max(25, Math.min(99, Math.round((locRatio * weights.location_budget_weight + sleepRatio * weights.sleep_weight + cleanRatio * weights.cleanliness_weight + (smokePts + petPts) * weights.smoking_pets_weight) * 100 / sum)));
+      const frictions = [];
+      if (me.city !== them.city) frictions.push(`Different cities (${me.city} vs ${them.city})`);
+      if (sleepRatio < 0.5) frictions.push(`Sleep clash (${me.sleep_schedule} vs ${them.sleep_schedule})`);
+      if (cleanRatio < 0.6) frictions.push(`Cleanliness gap (${me.cleaning_habit} vs ${them.cleaning_habit})`);
+      if (petConflict) frictions.push(`Pet conflict (${me.pet_preference} vs ${them.pet_preference})`);
+      if (smokePts < 0.2) frictions.push(`Smoking conflict (${me.smoking_habit} vs ${them.smoking_habit})`);
+      return { totalScore, frictions };
+    }
+
+    function buildVibeQuestions(me, them, frictions) {
+      return {
+        frictions: frictions.length ? frictions : ['No major lifestyle clashes — confirm guest & cook split rules.'],
+        questions: [
+          me.sleep_schedule !== them.sleep_schedule ? `Since you are "${me.sleep_schedule}" and they are "${them.sleep_schedule}", how will you handle late-night calls or kitchen noise?` : 'How will you split recurring expenses like cook, maid, RO water, and WiFi?',
+          them.pet_preference.startsWith('Has a') ? `How will pet care and society rules be managed for their ${them.pet_preference.replace('Has a ', '')}?` : 'What are your boundaries around weekend guests, house parties, and WFH calls?',
+          'Before signing the 11-month agreement, how will you split the security deposit and handle early exit notice?'
+        ]
+      };
+    }
+
+    function ResetPasswordScreen({ onDone }) {
+      const [newPass, setNewPass] = useState('');
+      const [confirmPass, setConfirmPass] = useState('');
+      const [saving, setSaving] = useState(false);
+      const [err, setErr] = useState(null);
+      const submit = async (e) => {
+        e.preventDefault(); setErr(null);
+        if (newPass.length < 6) return setErr('Password must be at least 6 characters.');
+        if (newPass !== confirmPass) return setErr('Passwords do not match.');
+        setSaving(true);
+        try { const { error } = await supabase.auth.updateUser({ password: newPass }); if (error) throw error; onDone(); }
+        catch (ex) { setErr(ex.message || 'Update failed.'); } finally { setSaving(false); }
+      };
+      return (
+        <div className="min-h-screen bg-black flex items-center justify-center px-4 py-10">
+          <div className="w-full max-w-md rounded-3xl bg-[#0D0D0D] border border-[#FF6B00] p-7 space-y-5">
+            <BrandLogo size={42} subtitle="Set a New Password" />
+            <h1 className="text-xl font-extrabold">Reset Your Password</h1>
+            {err && <div className="p-3 rounded-xl bg-[#141414] border border-[#FF6B00] text-xs">{err}</div>}
+            <form onSubmit={submit} className="space-y-3">
+              <input type="password" required minLength={6} value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder="New password (min 6 chars)" className={INP} />
+              <input type="password" required minLength={6} value={confirmPass} onChange={(e) => setConfirmPass(e.target.value)} placeholder="Confirm new password" className={INP} />
+              <button type="submit" disabled={saving} className="w-full py-3 rounded-xl bg-[#FF6B00] text-sm font-extrabold">{saving ? 'Updating...' : 'Save New Password & Enter'}</button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    function AuthScreen({ onAuthSuccess }) {
+      const [mode, setMode] = useState('signup');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [msg, setMsg] = useState(null);
+      const [err, setErr] = useState(null);
+
+      const handleEmailAuth = async (e) => {
+        e.preventDefault(); setLoading(true); setErr(null); setMsg(null);
+        try {
+          if (mode === 'forgot') {
+            const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: APP_REDIRECT_URL });
+            if (error) throw error;
+            setMsg('Reset link sent! Check your email inbox (or spam) and tap the link to set a new password.');
+            setMode('login');
+          } else if (mode === 'login') {
+            const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+            if (error) throw error;
+            if (data.session) onAuthSuccess(data.session);
+          } else {
+            const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: APP_REDIRECT_URL } });
+            if (error) throw error;
+            if (data.session) onAuthSuccess(data.session);
+            else { setMsg('Account created! Check your email inbox (or spam) to confirm, then sign in.'); setMode('login'); }
+          }
+        } catch (ex) { setErr(ex.message || 'Authentication failed.'); } finally { setLoading(false); }
+      };
+
+      return (
+        <div className="min-h-screen bg-black flex items-center justify-center px-4 py-10">
+          <div className="w-full max-w-md rounded-3xl bg-[#0D0D0D] border border-[#C0C0C0]/25 p-7 space-y-5 shadow-2xl">
+            <BrandLogo size={46} subtitle="Vibe Check Before the 11-Month Lock-In" />
+            <div>
+              <h1 className="text-2xl font-extrabold">{mode === 'forgot' ? 'Reset Your Password' : (mode === 'login' ? 'Sign in to Make my Mate' : 'Create your Flatmate Account')}</h1>
+              <p className="text-xs text-[#9E9E9E] mt-1">{mode === 'forgot' ? 'Enter your registered email for a password reset link.' : '18+ verified roommates across 9 major Indian cities.'}</p>
+            </div>
+            {mode !== 'forgot' && (
+              <div className="flex p-1 rounded-xl bg-black border border-[#C0C0C0]/25">
+                <button type="button" onClick={() => { setMode('login'); setErr(null); setMsg(null); }} className={`flex-1 py-2 rounded-lg text-xs font-bold ${mode === 'login' ? 'bg-[#FF6B00] text-white' : 'text-[#9E9E9E]'}`}>Sign In</button>
+                <button type="button" onClick={() => { setMode('signup'); setErr(null); setMsg(null); }} className={`flex-1 py-2 rounded-lg text-xs font-bold ${mode === 'signup' ? 'bg-[#FF6B00] text-white' : 'text-[#9E9E9E]'}`}>Sign Up</button>
+              </div>
+            )}
+            {err && <div className="p-3 rounded-xl bg-[#141414] border border-[#FF6B00] text-xs">{err}</div>}
+            {msg && <div className="p-3 rounded-xl bg-[#141414] border border-white text-xs">{msg}</div>}
+            <form onSubmit={handleEmailAuth} className="space-y-3">
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.in" className={INP} />
+              {mode !== 'forgot' && (
+                <div>
+                  <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (min 6 chars)" className={INP} />
+                  {mode === 'login' && <div className="text-right mt-1.5"><button type="button" onClick={() => { setMode('forgot'); setErr(null); setMsg(null); }} className="text-[11px] font-bold text-[#FF6B00] hover:underline">Forgot password?</button></div>}
+                </div>
+              )}
+              <button type="submit" disabled={loading} className="w-full py-3 rounded-xl bg-[#FF6B00] hover:bg-[#e56000] text-white text-sm font-extrabold disabled:opacity-60">
+                {loading ? 'Please wait...' : (mode === 'forgot' ? 'Send Reset Link' : (mode === 'login' ? 'Enter Make my Mate' : 'Create Account'))}
+              </button>
+              {mode === 'forgot' && <button type="button" onClick={() => { setMode('login'); setErr(null); }} className="w-full py-1.5 text-xs font-bold text-[#C0C0C0]">← Back to Sign In</button>}
+            </form>
+            <p className="text-center text-[11px] text-[#9E9E9E]">18+ only. By continuing, you agree to our <a href="privacy.html" className="text-[#FF6B00] underline font-semibold">Privacy Policy &amp; Child Safety Standards</a>.</p>
+          </div>
+        </div>
+      );
+    }
+
+    function OnboardingWizard({ session, onCompleted }) {
+      const uid = session.user.id;
+      const [fullName, setFullName] = useState('');
+      const [age, setAge] = useState(25);
+      const [gender, setGender] = useState('Male');
+      const [occupation, setOccupation] = useState('');
+      const [bio, setBio] = useState('Looking for a clean, transparent flatmate before signing an 11-month lease.');
+      const [avatarUrl, setAvatarUrl] = useState(DEFAULT_AVATAR);
+      const [uploading, setUploading] = useState(false);
+      const [city, setCity] = useState('Bengaluru');
+      const [locality, setLocality] = useState(INDIAN_CITIES.Bengaluru[0]);
+      const [customLoc, setCustomLoc] = useState('');
+      const [minBudget, setMinBudget] = useState(14000);
+      const [maxBudget, setMaxBudget] = useState(24000);
+      const [sleepSchedule, setSleepSchedule] = useState('Balanced 12 AM');
+      const [cleaningHabit, setCleaningHabit] = useState('Cleans Daily');
+      const [smokingHabit, setSmokingHabit] = useState('No Smoking');
+      const [petPreference, setPetPreference] = useState('Pet Friendly');
+      const [hasRoom, setHasRoom] = useState(false);
+      const [saving, setSaving] = useState(false);
+      const [err, setErr] = useState(null);
+
+      const pickAvatar = async (e) => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        setUploading(true); setErr(null);
+        try { setAvatarUrl(await compressAndUploadImage(f, uid, 'avatar')); }
+        catch (ex) { setErr('Photo upload failed: ' + ex.message); } finally { setUploading(false); }
+      };
+
+      const submit = async (e) => {
+        e.preventDefault(); setSaving(true); setErr(null);
+        const loc = locality === '__OTHER__' ? (customLoc.trim() || 'City Center') : locality;
+        try {
+          const { error: pErr } = await supabase.from('profiles').upsert({ id: uid, email: session.user.email, full_name: fullName.trim(), age: Number(age), gender, occupation: occupation.trim() || 'Working Professional', bio: bio.trim(), avatar_url: avatarUrl, is_verified: false, is_boosted: false, role: 'user' });
+          if (pErr) throw pErr;
+          const { error: prErr } = await supabase.from('lifestyle_preferences').upsert({ user_id: uid, city, locality: loc, min_budget: Number(minBudget), max_budget: Number(maxBudget), split_ratio: '50/50', sleep_schedule: sleepSchedule, cleaning_habit: cleaningHabit, smoking_habit: smokingHabit, pet_preference: petPreference, has_room: hasRoom });
+          if (prErr) throw prErr;
+          onCompleted();
+        } catch (ex) { setErr(ex.message || 'Save failed.'); } finally { setSaving(false); }
+      };
+
+      return (
+        <div className="min-h-screen bg-black flex items-center justify-center px-4 py-10">
+          <form onSubmit={submit} className="w-full max-w-xl rounded-3xl bg-[#0D0D0D] border border-[#C0C0C0]/25 p-6 space-y-4">
+            <BrandLogo size={40} subtitle="Complete your Flatmate Profile (18+ only)" />
+            {err && <div className="p-3 rounded-xl bg-[#141414] border border-[#FF6B00] text-xs">{err}</div>}
+            <div className="flex items-center gap-4 p-3 rounded-2xl bg-[#141414] border border-[#C0C0C0]/20">
+              <img src={avatarUrl} className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6B00] shrink-0" />
+              <div>
+                <p className="text-xs font-bold">Profile Photo</p>
+                <p className="text-[11px] text-[#9E9E9E] mb-2">Real photos get 3x more matches</p>
+                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#FF6B00] text-xs font-bold cursor-pointer"><SvgIcon name="camera" className="w-3.5 h-3.5" /><span>{uploading ? 'Uploading...' : 'Upload Photo'}</span><input type="file" accept="image/*" onChange={pickAvatar} className="hidden" /></label>
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <input required placeholder="Full Name" value={fullName} onChange={(e) => setFullName(e.target.value)} className={INP} />
+              <input required placeholder="Role / Company" value={occupation} onChange={(e) => setOccupation(e.target.value)} className={INP} />
+              <input type="number" min="18" max="65" value={age} onChange={(e) => setAge(e.target.value)} className={INP} />
+              <select value={gender} onChange={(e) => setGender(e.target.value)} className={INP}><option>Male</option><option>Female</option><option>Non-binary</option></select>
+              <select value={city} onChange={(e) => { setCity(e.target.value); setLocality(INDIAN_CITIES[e.target.value][0]); }} className={INP}>{CITY_LIST.map((c) => <option key={c}>{c}</option>)}</select>
+              <select value={locality} onChange={(e) => setLocality(e.target.value)} className={INP}>{INDIAN_CITIES[city].map((l) => <option key={l}>{l}</option>)}<option value="__OTHER__">Other (Type Area)</option></select>
+            </div>
+            {locality === '__OTHER__' && <input required placeholder={`Area in ${city}`} value={customLoc} onChange={(e) => setCustomLoc(e.target.value)} className={INP} />}
+            <div>
+              <label className="block text-[11px] text-[#9E9E9E] mb-1">Budget: ₹{Number(minBudget).toLocaleString('en-IN')} – ₹{Number(maxBudget).toLocaleString('en-IN')}</label>
+              <div className="grid grid-cols-2 gap-3">
+                <input type="range" min="8000" max="30000" step="1000" value={minBudget} onChange={(e) => setMinBudget(Number(e.target.value))} />
+                <input type="range" min="12000" max="40000" step="1000" value={maxBudget} onChange={(e) => setMaxBudget(Math.max(minBudget + 2000, Number(e.target.value)))} />
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <select value={sleepSchedule} onChange={(e) => setSleepSchedule(e.target.value)} className={INP}><option>Early Bird by 11 PM</option><option>Balanced 12 AM</option><option>Night Owl 2 AM+</option></select>
+              <select value={cleaningHabit} onChange={(e) => setCleaningHabit(e.target.value)} className={INP}><option>Cleans Daily</option><option>Weekly Maid + Tidy</option><option>Chill / Weekend Clean</option></select>
+              <select value={smokingHabit} onChange={(e) => setSmokingHabit(e.target.value)} className={INP}><option>No Smoking</option><option>Social / Balcony Only</option><option>Smoker Friendly</option></select>
+              <select value={petPreference} onChange={(e) => setPetPreference(e.target.value)} className={INP}><option>No Pets</option><option>Pet Friendly</option><option>Has a Dog</option><option>Has a Cat</option></select>
+            </div>
+            <textarea rows="2" value={bio} onChange={(e) => setBio(e.target.value)} className={INP} />
+            <label className="flex items-center gap-2 text-xs cursor-pointer"><input type="checkbox" checked={hasRoom} onChange={(e) => setHasRoom(e.target.checked)} className="accent-[#FF6B00]" />I already have a flat/room shortlisted</label>
+            <button type="submit" disabled={saving || uploading} className="w-full py-3 rounded-xl bg-[#FF6B00] text-sm font-extrabold disabled:opacity-60">{saving ? 'Saving...' : 'Launch Discover Deck'}</button>
+          </form>
+        </div>
+      );
+    }
+
+    function MainApp({ session, onSignOut }) {
+      const uid = session.user.id;
+      const [loading, setLoading] = useState(true);
+      const [tab, setTab] = useState('discover');
+      const [myProfile, setMyProfile] = useState(null);
+      const [myPrefs, setMyPrefs] = useState(null);
+      const [profiles, setProfiles] = useState([]);
+      const [prefsMap, setPrefsMap] = useState({});
+      const [swipes, setSwipes] = useState([]);
+      const [matches, setMatches] = useState([]);
+      const [listings, setListings] = useState([]);
+      const [kycQueue, setKycQueue] = useState([]);
+      const [reports, setReports] = useState([]);
+      const [weights, setWeights] = useState({ location_budget_weight: 35, sleep_weight: 25, cleanliness_weight: 20, smoking_pets_weight: 20 });
+
+      const [optimisticSwiped, setOptimisticSwiped] = useState([]);
+      const [blockedIds, setBlockedIds] = useState(() => { try { return JSON.parse(localStorage.getItem('mmm_blocked_' + uid) || '[]'); } catch (e) { return []; } });
+      const [dragX, setDragX] = useState(0);
+      const startXRef = useRef(null);
+      const chatEndRef = useRef(null);
+
+      const [notifPerm, setNotifPerm] = useState(() => ('Notification' in window ? Notification.permission : 'denied'));
+      const [toast, setToast] = useState(null);
+      const [unreadCount, setUnreadCount] = useState(0);
+
+      const [cityFilter, setCityFilter] = useState('All');
+      const [flatsCityFilter, setFlatsCityFilter] = useState('All');
+      const [compareItem, setCompareItem] = useState(null);
+      const [vibeOutput, setVibeOutput] = useState(null);
+      const [matchPopup, setMatchPopup] = useState(null);
+      const [zoomPhotoUrl, setZoomPhotoUrl] = useState(null);
+
+      const [reportModal, setReportModal] = useState(null);
+      const [reportReason, setReportReason] = useState(REPORT_REASONS[0]);
+      const [reportDetails, setReportDetails] = useState('');
+      const [blockReportedUser, setBlockReportedUser] = useState(true);
+      const [submittingReport, setSubmittingReport] = useState(false);
+      const [reportSentMsg, setReportSentMsg] = useState(false);
+
+      const [showAccountModal, setShowAccountModal] = useState(false);
+      const [editingProfile, setEditingProfile] = useState(false);
+      const [editForm, setEditForm] = useState({});
+      const [savingEdit, setSavingEdit] = useState(false);
+      const [uploadingAvatar, setUploadingAvatar] = useState(false);
+      const [accountMsg, setAccountMsg] = useState(null);
+      const [confirmDelete, setConfirmDelete] = useState(false);
+      const [deleting, setDeleting] = useState(false);
+
+      const [fullChatMatchId, setFullChatMatchId] = useState(null);
+      const [openingChat, setOpeningChat] = useState(false);
+      const [messages, setMessages] = useState([]);
+      const [draftMsg, setDraftMsg] = useState('');
+      const [sendingChatPhoto, setSendingChatPhoto] = useState(false);
+      const [showKycModal, setShowKycModal] = useState(false);
+      const [kycDocType, setKycDocType] = useState('Aadhaar');
+      const [kycDocVal, setKycDocVal] = useState('');
+      const [showMeetupModal, setShowMeetupModal] = useState(false);
+      const [meetupType, setMeetupType] = useState('Coffee Meetup');
+      const [meetupTime, setMeetupTime] = useState('Sunday, 4:00 PM');
+      const [meetupLocation, setMeetupLocation] = useState('Local Cafe / Flat Tour');
+
+      const [showFlatForm, setShowFlatForm] = useState(false);
+      const [flatForm, setFlatForm] = useState({ title: '', city: 'Bengaluru', loc: INDIAN_CITIES.Bengaluru[0], customLoc: '', bhk: '2BHK', rent: 44000, deposit: 120000, img: '' });
+      const [uploadingFlatImg, setUploadingFlatImg] = useState(false);
+
+      const pushNotification = (title, body, targetTab = 'matches', matchId = null) => {
+        setToast({ id: Date.now(), title, body, targetTab, matchId });
+        fireDeviceNotification(title, body);
+        setTimeout(() => setToast((prev) => (prev && Date.now() - prev.id >= 5500 ? null : prev)), 6000);
+      };
+
+      const requestNotifPermission = async () => {
+        if (!('Notification' in window)) return;
+        const perm = await Notification.requestPermission();
+        setNotifPerm(perm);
+        if (perm === 'granted') pushNotification('Alerts Enabled!', 'Instant notifications enabled for matches & messages.', tab);
+      };
+
+      const loadAll = async () => {
+        const [{ data: pD }, { data: prD }, { data: sD }, { data: mD }, { data: lD }, { data: aD }, { data: kD }, { data: rD }] = await Promise.all([
+          supabase.from('profiles').select('*'),
+          supabase.from('lifestyle_preferences').select('*'),
+          supabase.from('swipes').select('*').eq('swiper_id', uid),
+          supabase.from('matches').select('*').or(`user_a_id.eq.${uid},user_b_id.eq.${uid}`).order('matched_at', { ascending: false }),
+          supabase.from('verified_listings').select('*').order('created_at', { ascending: false }),
+          supabase.from('algorithm_config').select('*').eq('id', 1).maybeSingle(),
+          supabase.from('kyc_verifications').select('*'),
+          supabase.from('safety_reports').select('*').order('created_at', { ascending: false })
+        ]);
+        const pList = pD || [], prList = prD || [], map = {};
+        prList.forEach((r) => { map[r.user_id] = r; });
+        setProfiles(pList); setPrefsMap(map);
+        setMyProfile(pList.find((p) => p.id === uid) || null);
+        setMyPrefs(map[uid] || null);
+        setSwipes(sD || []); setMatches(mD || []); setListings(lD || []); setKycQueue(kD || []); setReports(rD || []);
+        if (aD) setWeights(aD);
+        setLoading(false);
+      };
+
+      useEffect(() => { loadAll(); }, [uid]);
+
+      useEffect(() => {
+        const channel = supabase.channel(`global-notifs-${uid}`)
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'matches' }, (payload) => {
+            const m = payload.new;
+            if (m.user_a_id === uid || m.user_b_id === uid) { setUnreadCount((c) => c + 1); pushNotification("It's a Flatmate Match!", 'Tap to open chat!', 'matches', m.id); loadAll(); }
+          })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+            const msg = payload.new;
+            if (msg.sender_id !== uid) {
+              if (fullChatMatchId === msg.match_id) setMessages((prev) => (prev.some((x) => x.id === msg.id) ? prev : [...prev, msg]));
+              else { setUnreadCount((c) => c + 1); pushNotification(msg.message_type === 'meetup_invite' ? 'New Meetup Invite' : 'New Message', msg.content, 'matches', msg.match_id); }
+            }
+          })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${uid}` }, (payload) => {
+            if (payload.new.is_verified && (!payload.old || !payload.old.is_verified)) { pushNotification('ID Verified!', 'Orange Verified Shield unlocked.', 'discover'); loadAll(); }
+          })
+          .subscribe();
+        return () => { supabase.removeChannel(channel); };
+      }, [uid, fullChatMatchId]);
+
+      useEffect(() => {
+        if (!fullChatMatchId) { setMessages([]); return; }
+        supabase.from('messages').select('*').eq('match_id', fullChatMatchId).order('created_at', { ascending: true }).then(({ data }) => setMessages(data || []));
+      }, [fullChatMatchId]);
+
+      useEffect(() => { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [messages.length, fullChatMatchId]);
+
+      const discoverFeed = useMemo(() => {
+        if (!myPrefs) return [];
+        const skip = new Set([...swipes.map((s) => s.target_id), ...optimisticSwiped, ...blockedIds]);
+        return profiles.filter((p) => p.id !== uid && !skip.has(p.id) && prefsMap[p.id] && (cityFilter === 'All' || prefsMap[p.id].city === cityFilter))
+          .map((p) => ({ profile: p, prefs: prefsMap[p.id], comp: computeCompatibility(myPrefs, prefsMap[p.id], weights) }))
+          .sort((a, b) => (a.profile.is_boosted !== b.profile.is_boosted ? (a.profile.is_boosted ? -1 : 1) : b.comp.totalScore - a.comp.totalScore));
+      }, [profiles, prefsMap, swipes, optimisticSwiped, blockedIds, myPrefs, weights, cityFilter, uid]);
+
+      const visibleListings = useMemo(() => listings.filter((l) => l.status === 'active' && !blockedIds.includes(l.owner_id) && (flatsCityFilter === 'All' || l.city === flatsCityFilter)), [listings, flatsCityFilter, blockedIds]);
+
+      if (loading) return <div className="min-h-screen bg-black flex items-center justify-center"><p className="text-sm font-bold text-[#FF6B00]">Loading Make my Mate...</p></div>;
+      if (!myProfile || !myPrefs) return <OnboardingWizard session={session} onCompleted={loadAll} />;
+
+      const openReportModal = (target) => {
+        setReportModal(target ? { userId: target.id, userName: target.full_name } : { userId: null, userName: null });
+        setReportReason(target ? REPORT_REASONS[0] : REPORT_REASONS[4]);
+        setReportDetails(''); setBlockReportedUser(Boolean(target)); setReportSentMsg(false);
+      };
+
+      const submitReport = async (e) => {
+        e.preventDefault(); setSubmittingReport(true);
+        try {
+          await supabase.from('safety_reports').insert({ reporter_id: uid, reported_user_id: reportModal && reportModal.userId ? reportModal.userId : null, reason: reportReason, details: reportDetails.trim() });
+          if (reportModal && reportModal.userId && blockReportedUser) {
+            const nextB = Array.from(new Set([...blockedIds, reportModal.userId]));
+            setBlockedIds(nextB);
+            try { localStorage.setItem('mmm_blocked_' + uid, JSON.stringify(nextB)); } catch (err) {}
+            await supabase.from('swipes').upsert({ swiper_id: uid, target_id: reportModal.userId, direction: 'pass', compatibility_score: 0 });
+            if (fullChatMatch && (fullChatMatch.user_a_id === reportModal.userId || fullChatMatch.user_b_id === reportModal.userId)) setFullChatMatchId(null);
+          }
+          setReportSentMsg(true); loadAll();
+        } finally { setSubmittingReport(false); }
+      };
+
+      const openAccountModal = () => {
+        const c = INDIAN_CITIES[myPrefs.city] ? myPrefs.city : 'Bengaluru';
+        const isKnown = INDIAN_CITIES[c].includes(myPrefs.locality);
+        setEditForm({ name: myProfile.full_name || '', age: myProfile.age || 25, gender: myProfile.gender || 'Male', occ: myProfile.occupation || '', bio: myProfile.bio || '', city: c, loc: isKnown ? myPrefs.locality : '__OTHER__', customLoc: isKnown ? '' : (myPrefs.locality || ''), minB: myPrefs.min_budget || 14000, maxB: myPrefs.max_budget || 24000, sleep: myPrefs.sleep_schedule || 'Balanced 12 AM', clean: myPrefs.cleaning_habit || 'Cleans Daily', smoke: myPrefs.smoking_habit || 'No Smoking', pet: myPrefs.pet_preference || 'Pet Friendly', hasRoom: Boolean(myPrefs.has_room) });
+        setEditingProfile(false); setConfirmDelete(false); setAccountMsg(null); setShowAccountModal(true);
+      };
+
+      const saveEditedProfile = async (e) => {
+        e.preventDefault(); setSavingEdit(true); setAccountMsg(null);
+        const loc = editForm.loc === '__OTHER__' ? (editForm.customLoc.trim() || 'City Center') : editForm.loc;
+        try {
+          const { error: pErr } = await supabase.from('profiles').update({ full_name: editForm.name.trim(), age: Number(editForm.age), gender: editForm.gender, occupation: editForm.occ.trim(), bio: editForm.bio.trim() }).eq('id', uid);
+          if (pErr) throw pErr;
+          const { error: prErr } = await supabase.from('lifestyle_preferences').update({ city: editForm.city, locality: loc, min_budget: Number(editForm.minB), max_budget: Number(editForm.maxB), sleep_schedule: editForm.sleep, cleaning_habit: editForm.clean, smoking_habit: editForm.smoke, pet_preference: editForm.pet, has_room: editForm.hasRoom }).eq('user_id', uid);
+          if (prErr) throw prErr;
+          setEditingProfile(false); setAccountMsg('Profile & habits updated!'); await loadAll();
+        } catch (ex) { setAccountMsg('Save failed: ' + ex.message); } finally { setSavingEdit(false); }
+      };
+
+      const openDirectChat = async (targetProfile) => {
+        if (!targetProfile || openingChat) return;
+        setOpeningChat(true);
+        try {
+          const ex = matches.find((m) => (m.user_a_id === uid && m.user_b_id === targetProfile.id) || (m.user_a_id === targetProfile.id && m.user_b_id === uid));
+          if (ex) { setFullChatMatchId(ex.id); setUnreadCount(0); return; }
+          const { data: cr } = await supabase.from('matches').insert({ user_a_id: uid, user_b_id: targetProfile.id, pipeline_stage: 1 }).select().single();
+          if (cr) { setMatches((prev) => [cr, ...prev]); setFullChatMatchId(cr.id); setUnreadCount(0); }
+          else {
+            const { data: rf } = await supabase.from('matches').select('*').or(`user_a_id.eq.${uid},user_b_id.eq.${uid}`);
+            const f = (rf || []).find((m) => (m.user_a_id === uid && m.user_b_id === targetProfile.id) || (m.user_a_id === targetProfile.id && m.user_b_id === uid));
+            if (f) { setMatches(rf); setFullChatMatchId(f.id); setUnreadCount(0); }
+          }
+        } finally { setOpeningChat(false); }
+      };
+
+      const handleSwipe = async (target, direction) => {
+        if (!target) return;
+        setDragX(0); setOptimisticSwiped((prev) => [...prev, target.profile.id]);
+        await supabase.from('swipes').upsert({ swiper_id: uid, target_id: target.profile.id, direction, compatibility_score: target.comp.totalScore });
+        if (direction === 'like' || direction === 'super') {
+          const { data: mutual } = await supabase.from('swipes').select('id').eq('swiper_id', target.profile.id).eq('target_id', uid).in('direction', ['like', 'super']).maybeSingle();
+          if (mutual) {
+            const { data: nm } = await supabase.from('matches').insert({ user_a_id: uid, user_b_id: target.profile.id, pipeline_stage: 1 }).select().single();
+            if (nm) { setMatchPopup({ match: nm, partner: target }); fireDeviceNotification("It's a Flatmate Match!", `Matched with ${target.profile.full_name}!`); }
+          }
+        }
+        loadAll();
+      };
+
+      const sendChatMessage = async (content, type = 'text', metadata = {}) => {
+        if (!fullChatMatchId || !content.trim()) return;
+        const text = content.trim(); setDraftMsg('');
+        const { data } = await supabase.from('messages').insert({ match_id: fullChatMatchId, sender_id: uid, content: text, message_type: type, metadata }).select().single();
+        if (data) setMessages((prev) => (prev.some((x) => x.id === data.id) ? prev : [...prev, data]));
+      };
+
+      const sendChatPhoto = async (e) => {
+        const f = e.target.files && e.target.files[0]; if (!f || !fullChatMatchId) return;
+        e.target.value = ''; setSendingChatPhoto(true);
+        try {
+          const imgUrl = await compressAndUploadImage(f, uid, 'chat');
+          const cap = draftMsg.trim(); setDraftMsg('');
+          const { data } = await supabase.from('messages').insert({ match_id: fullChatMatchId, sender_id: uid, content: cap || '📷 Photo', message_type: 'text', metadata: { image_url: imgUrl } }).select().single();
+          if (data) setMessages((prev) => (prev.some((x) => x.id === data.id) ? prev : [...prev, data]));
+        } catch (ex) { setToast({ id: Date.now(), title: 'Photo send failed', body: ex.message, targetTab: 'matches' }); } finally { setSendingChatPhoto(false); }
+      };
+
+      const updateAvatar = async (e) => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        setUploadingAvatar(true); setAccountMsg(null);
+        try {
+          const url = await compressAndUploadImage(f, uid, 'avatar');
+          const { error } = await supabase.from('profiles').update({ avatar_url: url }).eq('id', uid);
+          if (error) throw error;
+          setAccountMsg('Profile photo updated!'); loadAll();
+        } catch (ex) { setAccountMsg('Upload error: ' + ex.message); } finally { setUploadingAvatar(false); }
+      };
+
+      const deleteAccount = async () => {
+        setDeleting(true); setAccountMsg(null);
+        try {
+          const { error: rpcErr } = await supabase.rpc('delete_my_account');
+          if (rpcErr) { const { error: delErr } = await supabase.from('profiles').delete().eq('id', uid); if (delErr) throw delErr; }
+          await supabase.auth.signOut(); setShowAccountModal(false);
+        } catch (ex) { setAccountMsg(ex.message || 'Delete failed.'); setDeleting(false); }
+      };
+
+      const fullChatMatch = fullChatMatchId ? matches.find((m) => m.id === fullChatMatchId) : null;
+      const fullChatPartner = fullChatMatch ? profiles.find((p) => p.id === (fullChatMatch.user_a_id === uid ? fullChatMatch.user_b_id : fullChatMatch.user_a_id)) : null;
+      const isUserA = fullChatMatch ? fullChatMatch.user_a_id === uid : true;
+      const myConfirmed = fullChatMatch ? (isUserA ? fullChatMatch.agreement_confirmed_a : fullChatMatch.agreement_confirmed_b) : false;
+      const partnerConfirmed = fullChatMatch ? (isUserA ? fullChatMatch.agreement_confirmed_b : fullChatMatch.agreement_confirmed_a) : false;
+
+      return (
+        <div className="min-h-screen bg-black text-white flex flex-col">
+          {toast && (
+            <button onClick={() => { if (toast.matchId) setFullChatMatchId(toast.matchId); else setTab(toast.targetTab); setUnreadCount(0); setToast(null); }} className="fixed top-4 right-4 z-[60] max-w-xs text-left p-3.5 rounded-2xl bg-[#141414] border-2 border-[#FF6B00] shadow-2xl space-y-1">
+              <div className="flex justify-between gap-2"><span className="text-xs font-extrabold text-[#FF6B00]">{toast.title}</span><span className="text-[10px] text-[#9E9E9E]">Tap</span></div>
+              <p className="text-xs line-clamp-2">{toast.body}</p>
+            </button>
+          )}
+
+          {fullChatMatch && fullChatPartner && (
+            <div className="fixed inset-0 z-50 bg-black flex flex-col">
+              <div className="bg-[#141414] border-b border-[#C0C0C0]/20 px-3 py-3 space-y-2.5 shrink-0">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <button onClick={() => setFullChatMatchId(null)} className="p-2 rounded-xl bg-black border border-[#C0C0C0]/25"><SvgIcon name="back" className="w-4 h-4" /></button>
+                    <img src={fullChatPartner.avatar_url || DEFAULT_AVATAR} className="w-9 h-9 rounded-full object-cover border border-[#FF6B00] shrink-0" />
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-extrabold flex items-center gap-1 truncate"><span className="truncate">{fullChatPartner.full_name}</span>{fullChatPartner.is_verified && <SvgIcon name="shield" className="w-3.5 h-3.5 text-[#FF6B00] shrink-0" />}</h3>
+                      <p className="text-[11px] text-[#9E9E9E] truncate">{fullChatPartner.occupation}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button onClick={() => openReportModal(fullChatPartner)} className="p-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-[#C0C0C0] hover:text-[#FF6B00]"><SvgIcon name="flag" className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => setShowKycModal(!showKycModal)} className="px-2.5 py-1.5 rounded-lg bg-black border border-[#C0C0C0]/30 text-[11px] font-bold">Verify ID</button>
+                    <button onClick={() => setShowMeetupModal(!showMeetupModal)} className="px-2.5 py-1.5 rounded-lg bg-[#FF6B00] text-[11px] font-bold">Meetup</button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[{ s: 1, t: '1. Chat' }, { s: 2, t: '2. Verify ID' }, { s: 3, t: '3. Meet' }, { s: 4, t: '4. Agree' }].map((st) => (
+                    <button key={st.s} onClick={async () => { await supabase.from('matches').update({ pipeline_stage: st.s }).eq('id', fullChatMatch.id); loadAll(); }} className={`py-1.5 px-2 rounded-lg border text-[10px] font-extrabold ${fullChatMatch.pipeline_stage === st.s ? 'bg-[#FF6B00] border-[#FF6B00] text-white' : 'bg-black border-[#C0C0C0]/20 text-[#9E9E9E]'}`}>{st.t}</button>
+                  ))}
+                </div>
+              </div>
+              {showKycModal && (
+                <form onSubmit={async (e) => { e.preventDefault(); const m = kycDocType === 'Aadhaar' ? `XXXX-XXXX-${kycDocVal.slice(-4)}` : `${kycDocVal.slice(0, 4)}****`; await supabase.from('kyc_verifications').insert({ user_id: uid, doc_type: kycDocType, doc_number_masked: m, status: 'pending' }); setShowKycModal(false); setKycDocVal(''); setToast({ id: Date.now(), title: 'KYC Submitted', body: 'Admin will review soon.', targetTab: 'matches' }); loadAll(); }} className="p-3 bg-[#0D0D0D] border-b border-[#FF6B00]/40 flex flex-wrap gap-2 shrink-0">
+                  <select value={kycDocType} onChange={(e) => setKycDocType(e.target.value)} className="px-3 py-1.5 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs"><option>Aadhaar</option><option>PAN</option><option>WorkEmail</option></select>
+                  <input required value={kycDocVal} onChange={(e) => setKycDocVal(e.target.value)} placeholder="Last 4 digits / PAN / Work Email" className="flex-1 px-3 py-1.5 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                  <button type="submit" className="px-4 py-1.5 rounded-lg bg-[#FF6B00] text-xs font-bold">Submit</button>
+                </form>
+              )}
+              {showMeetupModal && (
+                <form onSubmit={async (e) => { e.preventDefault(); await sendChatMessage(`${meetupType} proposed for ${meetupTime} at ${meetupLocation}`, 'meetup_invite', { meetup_type: meetupType, proposed_time: meetupTime, location: meetupLocation }); await supabase.from('matches').update({ pipeline_stage: 3 }).eq('id', fullChatMatch.id); setShowMeetupModal(false); loadAll(); }} className="p-3 bg-[#0D0D0D] border-b border-[#FF6B00]/40 grid sm:grid-cols-4 gap-2 shrink-0">
+                  <select value={meetupType} onChange={(e) => setMeetupType(e.target.value)} className="px-2.5 py-1.5 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs"><option>Coffee Meetup</option><option>Video Call</option><option>Flat Tour</option></select>
+                  <input value={meetupTime} onChange={(e) => setMeetupTime(e.target.value)} className="px-2.5 py-1.5 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                  <input value={meetupLocation} onChange={(e) => setMeetupLocation(e.target.value)} className="px-2.5 py-1.5 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs" />
+                  <button type="submit" className="px-3 py-1.5 rounded-lg bg-[#FF6B00] text-xs font-bold">Send Invite</button>
+                </form>
+              )}
+              <div className="flex-1 p-4 space-y-3 overflow-y-auto bg-black">
+                {messages.length === 0 && <p className="text-center text-xs text-[#9E9E9E] pt-10">Say hello to {fullChatPartner.full_name.split(' ')[0]} — type anything or send a photo below.</p>}
+                {messages.map((m) => {
+                  const imgSrc = m.metadata && m.metadata.image_url;
+                  const showText = !(imgSrc && m.content === '📷 Photo');
+                  return (
+                    <div key={m.id} className={`flex ${m.sender_id === uid ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[80%] rounded-2xl text-xs overflow-hidden ${m.sender_id === uid ? 'bg-[#FF6B00] text-white' : 'bg-[#141414] border border-[#C0C0C0]/25 text-white'}`}>
+                        {imgSrc && <img src={imgSrc} onClick={() => setZoomPhotoUrl(imgSrc)} className="max-h-64 w-full object-cover cursor-pointer" />}
+                        <div className={imgSrc && !showText ? '' : 'px-4 py-2.5'}>
+                          {m.message_type === 'meetup_invite' && <span className="block text-[10px] font-extrabold uppercase mb-1">Meetup Invite</span>}
+                          {showText && <p className="whitespace-pre-wrap break-words">{m.content}</p>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={chatEndRef} />
+              </div>
+              {fullChatMatch.pipeline_stage === 4 && (
+                <div className="p-3 bg-[#141414] border-t border-[#FF6B00] space-y-2 shrink-0">
+                  <div className="flex justify-between text-xs"><span className="font-extrabold">Stage 4: Lease Readiness</span><span className="text-[#FF6B00] font-bold">{myConfirmed && partnerConfirmed ? 'Both Confirmed!' : myConfirmed ? 'Waiting on partner' : 'Confirm below'}</span></div>
+                  <button onClick={async () => { await supabase.from('matches').update(isUserA ? { agreement_confirmed_a: !myConfirmed } : { agreement_confirmed_b: !myConfirmed }).eq('id', fullChatMatch.id); loadAll(); }} className={`w-full py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 ${myConfirmed ? 'bg-white text-black' : 'bg-[#FF6B00] text-white'}`}><SvgIcon name="check" className="w-4 h-4" />{myConfirmed ? 'Confirmed (Tap to Undo)' : 'Confirm Rent Split & Rules Before Signing'}</button>
+                </div>
+              )}
+              <form onSubmit={(e) => { e.preventDefault(); sendChatMessage(draftMsg); }} className="p-3 bg-[#141414] border-t border-[#C0C0C0]/20 flex items-center gap-2 shrink-0">
+                <label className="p-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-[#FF6B00] cursor-pointer shrink-0"><SvgIcon name="camera" className="w-5 h-5" /><input type="file" accept="image/*" onChange={sendChatPhoto} disabled={sendingChatPhoto} className="hidden" /></label>
+                <input value={draftMsg} onChange={(e) => setDraftMsg(e.target.value)} placeholder={sendingChatPhoto ? 'Sending photo...' : 'Type your message...'} className="flex-1 px-4 py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 focus:border-[#FF6B00] outline-none text-sm text-white" />
+                <button type="submit" disabled={!draftMsg.trim()} className="px-4 py-2.5 rounded-xl bg-[#FF6B00] text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 shrink-0"><SvgIcon name="send" className="w-4 h-4" /><span className="hidden sm:inline">Send</span></button>
+              </form>
+            </div>
+          )}
+
+          {zoomPhotoUrl && (
+            <div onClick={() => setZoomPhotoUrl(null)} className="fixed inset-0 z-[70] bg-black/95 flex items-center justify-center p-4">
+              <button onClick={() => setZoomPhotoUrl(null)} className="absolute top-4 right-4 p-2 rounded-full bg-[#141414]"><SvgIcon name="x" className="w-6 h-6" /></button>
+              <img src={zoomPhotoUrl} className="max-w-full max-h-[90vh] rounded-2xl object-contain" />
+            </div>
+          )}
+
+          {reportModal && (
+            <div className="fixed inset-0 z-[65] bg-black/85 flex items-center justify-center p-4">
+              <div className="w-full max-w-md rounded-2xl bg-[#0D0D0D] border border-[#FF6B00] p-6 space-y-4">
+                <div className="flex justify-between items-center"><h3 className="text-base font-extrabold flex items-center gap-2"><SvgIcon name="flag" className="w-4 h-4 text-[#FF6B00]" />{reportModal.userName ? `Report ${reportModal.userName}` : 'Report Safety Concern'}</h3><button onClick={() => setReportModal(null)}><SvgIcon name="x" className="w-5 h-5" /></button></div>
+                {reportSentMsg ? (
+                  <div className="space-y-3 text-xs">
+                    <div className="p-4 rounded-xl bg-[#141414] border border-[#FF6B00]">Report submitted! Our safety team reviews reports within 24 hours.</div>
+                    <a href={`mailto:suyashbabar17@gmail.com?subject=Make%20my%20Mate%20Report&body=${encodeURIComponent(reportReason + ': ' + reportDetails)}`} className="block w-full py-2.5 text-center rounded-xl bg-[#141414] border border-[#C0C0C0]/30 font-bold">Email Safety Team</a>
+                    <button onClick={() => setReportModal(null)} className="w-full py-2.5 rounded-xl bg-[#FF6B00] font-extrabold">Done</button>
+                  </div>
+                ) : (
+                  <form onSubmit={submitReport} className="space-y-3 text-xs">
+                    <select value={reportReason} onChange={(e) => setReportReason(e.target.value)} className={INP}>{REPORT_REASONS.map((r) => <option key={r}>{r}</option>)}</select>
+                    <textarea rows="3" required placeholder="Describe what happened..." value={reportDetails} onChange={(e) => setReportDetails(e.target.value)} className={INP} />
+                    {reportModal.userId && <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={blockReportedUser} onChange={(e) => setBlockReportedUser(e.target.checked)} className="accent-[#FF6B00]" />Block &amp; hide {reportModal.userName}</label>}
+                    <button type="submit" disabled={submittingReport} className="w-full py-3 rounded-xl bg-[#FF6B00] font-extrabold">{submittingReport ? 'Submitting...' : 'Submit Report'}</button>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
+
+          <header className="sticky top-0 z-40 bg-[#0D0D0D]/95 backdrop-blur border-b border-[#C0C0C0]/20">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+              <BrandLogo size={36} subtitle="Compatible Flatmates Before Signing" />
+              <div className="flex items-center gap-2">
+                <button onClick={requestNotifPermission} className={`relative p-2 rounded-xl border text-xs font-bold flex items-center gap-1 ${notifPerm === 'granted' ? 'bg-[#141414] border-[#C0C0C0]/25 text-[#FF6B00]' : 'bg-[#FF6B00] border-[#FF6B00] text-white'}`}>
+                  <SvgIcon name="bell" className="w-4 h-4" />{notifPerm !== 'granted' && <span className="hidden sm:inline text-[11px]">Enable Alerts</span>}
+                  {unreadCount > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-white text-black text-[10px] font-extrabold flex items-center justify-center">{unreadCount}</span>}
+                </button>
+                {myProfile.role === 'admin' && <button onClick={() => setTab(tab === 'admin' ? 'discover' : 'admin')} className={`px-3 py-1.5 rounded-full text-xs font-bold border ${tab === 'admin' ? 'bg-[#FF6B00] border-[#FF6B00]' : 'bg-[#141414] border-[#C0C0C0]/30'}`}>{tab === 'admin' ? 'User App' : 'Admin'}</button>}
+                <button onClick={openAccountModal} className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-[#141414] border border-[#C0C0C0]/25"><img src={myProfile.avatar_url || DEFAULT_AVATAR} className="w-6 h-6 rounded-full object-cover" /><span className="hidden sm:inline text-xs font-bold">{myProfile.full_name}</span></button>
+                <button onClick={onSignOut} title="Sign Out" className="p-2 rounded-xl bg-[#141414] border border-[#C0C0C0]/25 text-[#C0C0C0]"><SvgIcon name="logout" className="w-4 h-4" /></button>
+              </div>
+            </div>
+            {tab !== 'admin' && (
+              <div className="max-w-7xl mx-auto px-4 pb-2.5 flex items-center gap-2 overflow-x-auto">
+                {[{ id: 'discover', label: 'Discover', icon: 'flame', count: discoverFeed.length }, { id: 'matches', label: 'Chats', icon: 'chat', count: matches.length, badge: unreadCount }, { id: 'flats', label: 'Verified Flats', icon: 'building', count: listings.filter((l) => l.status === 'active').length }].map((item) => (
+                  <button key={item.id} onClick={() => { setTab(item.id); if (item.id === 'matches') setUnreadCount(0); }} className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap ${tab === item.id ? 'bg-[#FF6B00] text-white' : 'bg-[#141414] border border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>
+                    <SvgIcon name={item.icon} className="w-3.5 h-3.5" /><span>{item.label}</span><span className="px-1.5 py-0.5 rounded-full bg-black/40 text-[10px]">{item.badge > 0 ? `${item.badge} new` : item.count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </header>
+
+          {tab === 'discover' && (
+            <main className="max-w-5xl mx-auto w-full px-4 py-6">
+              <div className="space-y-3 mb-5">
+                <div><h2 className="text-xl font-extrabold">Discover Compatible Flatmates</h2><p className="text-xs text-[#9E9E9E]">Drag card right to Match or tap Chat directly</p></div>
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  {['All', ...CITY_LIST].map((c) => <button key={c} onClick={() => setCityFilter(c)} className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ${cityFilter === c ? 'bg-[#FF6B00] border-[#FF6B00]' : 'bg-[#141414] border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>{c}</button>)}
+                </div>
+              </div>
+              <div className="max-w-md mx-auto">
+                {discoverFeed[0] ? (
+                  <div>
+                    <div
+                      onPointerDown={(e) => { startXRef.current = e.clientX; }}
+                      onPointerMove={(e) => { if (startXRef.current !== null) setDragX(e.clientX - startXRef.current); }}
+                      onPointerUp={() => { if (startXRef.current === null) return; if (dragX > 90) handleSwipe(discoverFeed[0], 'like'); else if (dragX < -90) handleSwipe(discoverFeed[0], 'pass'); else setDragX(0); startXRef.current = null; }}
+                      onPointerLeave={() => { startXRef.current = null; setDragX(0); }}
+                      style={{ transform: `translateX(${dragX}px) rotate(${dragX * 0.035}deg)`, transition: startXRef.current === null ? 'transform 0.22s ease' : 'none' }}
+                      className={`relative rounded-3xl bg-[#0D0D0D] overflow-hidden shadow-2xl select-none touch-pan-y ${discoverFeed[0].profile.is_boosted ? 'border-2 border-[#FF6B00]' : 'border border-[#C0C0C0]/30'}`}
+                    >
+                      {dragX > 35 && <div className="absolute top-6 left-6 z-20 px-4 py-1.5 rounded-xl bg-[#FF6B00] font-extrabold text-sm">MATCH</div>}
+                      {dragX < -35 && <div className="absolute top-6 right-6 z-20 px-4 py-1.5 rounded-xl bg-black border border-white font-extrabold text-sm">PASS</div>}
+                      <div className="relative h-80 bg-[#141414]">
+                        <img src={discoverFeed[0].profile.avatar_url || DEFAULT_AVATAR} draggable={false} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent" />
+                        <div className="absolute top-4 inset-x-4 flex justify-between items-center">
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FF6B00] text-xs font-extrabold"><SvgIcon name="flame" className="w-3.5 h-3.5" />{discoverFeed[0].comp.totalScore}% Match</span>
+                          <div className="flex items-center gap-1.5">
+                            {discoverFeed[0].profile.is_verified && <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-black/90 border border-[#FF6B00] text-[11px] font-bold"><SvgIcon name="shield" className="w-3.5 h-3.5 text-[#FF6B00]" />Verified</span>}
+                            <button type="button" onClick={(e) => { e.stopPropagation(); openReportModal(discoverFeed[0].profile); }} className="p-1.5 rounded-full bg-black/85 border border-[#C0C0C0]/30 text-[#C0C0C0] hover:text-[#FF6B00]"><SvgIcon name="flag" className="w-3.5 h-3.5" /></button>
+                          </div>
+                        </div>
+                        <div className="absolute bottom-4 inset-x-5">
+                          <div className="flex justify-between items-end">
+                            <div><h3 className="text-2xl font-extrabold">{discoverFeed[0].profile.full_name}, {discoverFeed[0].profile.age}</h3><p className="text-xs text-[#C0C0C0]">{discoverFeed[0].profile.occupation}</p></div>
+                            <span className="px-2.5 py-1 rounded-lg bg-white text-black text-xs font-extrabold">₹{Math.round(discoverFeed[0].prefs.min_budget / 1000)}K–₹{Math.round(discoverFeed[0].prefs.max_budget / 1000)}K</span>
+                          </div>
+                          <p className="flex items-center gap-1.5 mt-2 text-xs"><SvgIcon name="pin" className="w-3.5 h-3.5 text-[#FF6B00]" />{discoverFeed[0].prefs.locality}, {discoverFeed[0].prefs.city}</p>
+                        </div>
+                      </div>
+                      <div className="p-5 space-y-4">
+                        <p className="text-xs text-[#C0C0C0]">{discoverFeed[0].profile.bio}</p>
+                        <div className="flex flex-wrap gap-2">{[discoverFeed[0].prefs.sleep_schedule, discoverFeed[0].prefs.cleaning_habit, discoverFeed[0].prefs.smoking_habit, discoverFeed[0].prefs.pet_preference].map((pill) => <span key={pill} className="px-2.5 py-1 rounded-full bg-[#141414] border border-[#C0C0C0]/25 text-[11px] font-semibold">{pill}</span>)}</div>
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <button onClick={() => { setCompareItem(discoverFeed[0]); setVibeOutput(null); }} className="py-2.5 px-3 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 text-xs font-bold flex items-center justify-center gap-1.5"><SvgIcon name="compare" className="w-4 h-4 text-[#FF6B00]" />Compare</button>
+                          <button disabled={openingChat} onClick={() => openDirectChat(discoverFeed[0].profile)} className="py-2.5 px-3 rounded-xl bg-[#FF6B00] text-xs font-extrabold flex items-center justify-center gap-1.5"><SvgIcon name="chat" className="w-4 h-4" />{openingChat ? 'Opening...' : 'Chat'}</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex justify-center items-center gap-5 mt-6">
+                      <button onClick={() => handleSwipe(discoverFeed[0], 'pass')} className="w-14 h-14 rounded-full bg-[#141414] border border-[#C0C0C0]/40 flex items-center justify-center"><SvgIcon name="x" className="w-6 h-6 text-[#C0C0C0]" /></button>
+                      <button onClick={() => handleSwipe(discoverFeed[0], 'super')} className="w-12 h-12 rounded-full bg-black border border-[#FF6B00] text-[#FF6B00] flex items-center justify-center"><SvgIcon name="star" className="w-5 h-5" /></button>
+                      <button onClick={() => handleSwipe(discoverFeed[0], 'like')} className="w-16 h-16 rounded-full bg-[#FF6B00] flex items-center justify-center shadow-[0_0_25px_rgba(255,107,0,0.45)]"><SvgIcon name="heart" className="w-7 h-7" /></button>
+                    </div>
+                  </div>
+                ) : <div className={`${CARD} p-10 text-center space-y-2`}><p className="text-base font-bold">No profiles yet in {cityFilter}</p><p className="text-xs text-[#9E9E9E]">Share Make my Mate with friends or switch to All cities.</p></div>}
+              </div>
+            </main>
+          )}
+
+          {tab === 'matches' && (
+            <main className="max-w-3xl mx-auto w-full px-4 py-6">
+              <div className={`${CARD} p-5 space-y-3`}>
+                <h2 className="text-base font-extrabold">Your Chats ({matches.filter((m) => !blockedIds.includes(m.user_a_id === uid ? m.user_b_id : m.user_a_id)).length})</h2>
+                {matches.length === 0 && <p className="text-xs text-[#9E9E9E]">Tap &quot;Chat&quot; on any profile or swipe right in Discover to start chatting.</p>}
+                {matches.map((m) => {
+                  const pid = m.user_a_id === uid ? m.user_b_id : m.user_a_id; if (blockedIds.includes(pid)) return null;
+                  const partner = profiles.find((p) => p.id === pid); const pPrefs = partner ? prefsMap[partner.id] : null;
+                  return (
+                    <button key={m.id} onClick={() => { setFullChatMatchId(m.id); setUnreadCount(0); }} className="w-full p-3.5 rounded-xl flex items-center justify-between gap-3 text-left bg-[#141414] border border-[#C0C0C0]/20 hover:border-[#FF6B00]">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img src={(partner && partner.avatar_url) || DEFAULT_AVATAR} className="w-12 h-12 rounded-full object-cover border border-[#FF6B00]/50 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold truncate flex items-center gap-1.5"><span>{(partner && partner.full_name) || 'Flatmate'}</span>{partner && partner.is_verified && <SvgIcon name="shield" className="w-3.5 h-3.5 text-[#FF6B00]" />}</p>
+                          <p className="text-[11px] text-[#9E9E9E] truncate">{pPrefs ? `${pPrefs.locality}, ${pPrefs.city}` : 'Tap to open full-screen chat'}</p>
+                        </div>
+                      </div>
+                      <span className="px-3 py-1.5 rounded-full bg-[#FF6B00] text-[11px] font-extrabold shrink-0">Open Chat</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </main>
+          )}
+
+          {tab === 'flats' && (
+            <main className="max-w-7xl mx-auto w-full px-4 py-6 space-y-5">
+              <div className="p-6 rounded-2xl bg-[#0D0D0D] border-2 border-[#FF6B00] flex flex-wrap items-center justify-between gap-4">
+                <div><h2 className="text-lg font-extrabold">Verified Flats &amp; Priority Boost</h2><p className="text-xs text-[#C0C0C0]">Transparent per-person rent &amp; security deposit breakdowns.</p></div>
+                <div className="flex gap-3">
+                  {!myProfile.is_boosted && <button onClick={async () => { await supabase.from('profiles').update({ is_boosted: true }).eq('id', uid); loadAll(); }} className="px-4 py-2.5 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Activate Boost</button>}
+                  <button onClick={() => setShowFlatForm(!showFlatForm)} className="px-4 py-2.5 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 text-xs font-bold flex items-center gap-1.5"><SvgIcon name="plus" className="w-4 h-4 text-[#FF6B00]" />Post a Flat</button>
+                </div>
+              </div>
+              {showFlatForm && (
+                <form onSubmit={async (e) => { e.preventDefault(); const div = flatForm.bhk === '3BHK' ? 3 : 2; const loc = flatForm.loc === '__OTHER__' ? (flatForm.customLoc.trim() || 'City Center') : flatForm.loc; await supabase.from('verified_listings').insert({ owner_id: uid, title: flatForm.title, city: flatForm.city, locality: loc, bhk_type: flatForm.bhk, total_rent: Number(flatForm.rent), per_person_rent: Math.round(Number(flatForm.rent) / div), security_deposit: Number(flatForm.deposit), amenities: ['High-Speed WiFi', 'Cook + Maid'], image_url: flatForm.img, is_verified: false, status: 'active' }); setFlatForm({ ...flatForm, title: '', customLoc: '', img: '' }); setShowFlatForm(false); loadAll(); }} className={`${CARD} p-5 space-y-3`}>
+                  <div className="grid sm:grid-cols-3 gap-3">
+                    <input required placeholder="Listing Title" value={flatForm.title} onChange={(e) => setFlatForm({ ...flatForm, title: e.target.value })} className={INP} />
+                    <select value={flatForm.city} onChange={(e) => setFlatForm({ ...flatForm, city: e.target.value, loc: INDIAN_CITIES[e.target.value][0] })} className={INP}>{CITY_LIST.map((c) => <option key={c}>{c}</option>)}</select>
+                    <select value={flatForm.loc} onChange={(e) => setFlatForm({ ...flatForm, loc: e.target.value })} className={INP}>{INDIAN_CITIES[flatForm.city].map((l) => <option key={l}>{l}</option>)}<option value="__OTHER__">Other (Type Area)</option></select>
+                    {flatForm.loc === '__OTHER__' && <input required placeholder={`Area in ${flatForm.city}`} value={flatForm.customLoc} onChange={(e) => setFlatForm({ ...flatForm, customLoc: e.target.value })} className={INP} />}
+                    <select value={flatForm.bhk} onChange={(e) => setFlatForm({ ...flatForm, bhk: e.target.value })} className={INP}><option>2BHK</option><option>3BHK</option></select>
+                    <input type="number" required value={flatForm.rent} onChange={(e) => setFlatForm({ ...flatForm, rent: e.target.value })} placeholder="Total Monthly Rent" className={INP} />
+                    <input type="number" required value={flatForm.deposit} onChange={(e) => setFlatForm({ ...flatForm, deposit: e.target.value })} placeholder="Security Deposit" className={INP} />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[#141414] border border-[#C0C0C0]/30 text-xs font-bold cursor-pointer"><SvgIcon name="camera" className="w-4 h-4 text-[#FF6B00]" /><span>{uploadingFlatImg ? 'Uploading...' : (flatForm.img ? 'Flat Photo Added ✓' : 'Add Room Photo (Optional)')}</span><input type="file" accept="image/*" onChange={async (e) => { const f = e.target.files && e.target.files[0]; if (!f) return; setUploadingFlatImg(true); try { const u = await compressAndUploadImage(f, uid, 'flat'); setFlatForm((p) => ({ ...p, img: u })); } catch (ex) {} finally { setUploadingFlatImg(false); } }} className="hidden" /></label>
+                    <button type="submit" disabled={uploadingFlatImg} className="px-5 py-2 rounded-lg bg-[#FF6B00] text-xs font-extrabold">Publish Listing</button>
+                  </div>
+                </form>
+              )}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                {['All', ...CITY_LIST].map((c) => <button key={c} onClick={() => setFlatsCityFilter(c)} className={`px-3 py-1 rounded-full text-xs font-bold border whitespace-nowrap ${flatsCityFilter === c ? 'bg-[#FF6B00] border-[#FF6B00]' : 'bg-[#141414] border-[#C0C0C0]/25 text-[#C0C0C0]'}`}>{c}</button>)}
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                {visibleListings.map((l) => (
+                  <div key={l.id} className={`${CARD} overflow-hidden`}>
+                    {l.image_url && <img src={l.image_url} className="w-full h-44 object-cover border-b border-[#C0C0C0]/20" />}
+                    <div className="p-5 space-y-3">
+                      <div className="flex justify-between items-start">
+                        <div><span className="px-2 py-0.5 rounded bg-white text-black text-[10px] font-extrabold">{l.bhk_type}</span><h3 className="text-base font-extrabold mt-2">{l.title}</h3><p className="text-xs text-[#9E9E9E] mt-1">{l.locality}, {l.city}</p></div>
+                        <div className="text-right"><p className="text-[10px] text-[#9E9E9E]">PER PERSON</p><p className="text-xl font-extrabold text-[#FF6B00]">₹{Number(l.per_person_rent).toLocaleString('en-IN')}</p></div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-black border border-[#C0C0C0]/15 text-xs">
+                        <div><span className="text-[10px] text-[#9E9E9E] block">Total Rent</span>₹{Number(l.total_rent).toLocaleString('en-IN')}</div>
+                        <div><span className="text-[10px] text-[#9E9E9E] block">Deposit</span>₹{Number(l.security_deposit).toLocaleString('en-IN')}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {visibleListings.length === 0 && <div className={`md:col-span-2 ${CARD} p-8 text-center text-xs text-[#9E9E9E]`}>No flats posted in {flatsCityFilter} yet.</div>}
+              </div>
+            </main>
+          )}
+
+          {tab === 'admin' && myProfile.role === 'admin' && (
+            <main className="max-w-7xl mx-auto w-full px-4 py-6 space-y-6">
+              <h1 className="text-2xl font-extrabold">Admin Moderation Console</h1>
+              <div className="grid sm:grid-cols-4 gap-4">
+                <div className={`${CARD} p-5`}><p className="text-xs text-[#9E9E9E]">Users</p><p className="text-2xl font-extrabold">{profiles.length}</p></div>
+                <div className={`${CARD} p-5`}><p className="text-xs text-[#9E9E9E]">Pending KYC</p><p className="text-2xl font-extrabold text-[#FF6B00]">{kycQueue.filter((k) => k.status === 'pending').length}</p></div>
+                <div className={`${CARD} p-5`}><p className="text-xs text-[#9E9E9E]">Listings</p><p className="text-2xl font-extrabold">{listings.length}</p></div>
+                <div className={`${CARD} p-5`}><p className="text-xs text-[#9E9E9E]">Safety Reports</p><p className="text-2xl font-extrabold text-[#FF6B00]">{reports.length}</p></div>
+              </div>
+              <div className={`${CARD} p-5 space-y-3`}>
+                <h2 className="text-sm font-extrabold">Pending KYC Queue</h2>
+                {kycQueue.filter((k) => k.status === 'pending').length === 0 && <p className="text-xs text-[#9E9E9E]">No pending KYC requests.</p>}
+                {kycQueue.filter((k) => k.status === 'pending').map((k) => (
+                  <div key={k.id} className="p-3 rounded-xl bg-[#141414] flex items-center justify-between">
+                    <span className="text-xs font-bold">{k.doc_type} • {k.doc_number_masked}</span>
+                    <button onClick={async () => { await supabase.from('kyc_verifications').update({ status: 'approved', reviewed_by: uid }).eq('id', k.id); await supabase.from('profiles').update({ is_verified: true }).eq('id', k.user_id); loadAll(); }} className="px-3 py-1.5 rounded-lg bg-[#FF6B00] text-xs font-bold">Approve Shield</button>
+                  </div>
+                ))}
+              </div>
+              <div className={`${CARD} p-5 space-y-3`}>
+                <h2 className="text-sm font-extrabold">User Safety Reports ({reports.length})</h2>
+                {reports.length === 0 && <p className="text-xs text-[#9E9E9E]">No safety reports submitted.</p>}
+                {reports.map((r) => <div key={r.id} className="p-3 rounded-xl bg-[#141414] space-y-1 text-xs"><p className="font-bold text-[#FF6B00]">{r.reason}</p><p className="text-[#C0C0C0]">{r.details}</p></div>)}
+              </div>
+            </main>
+          )}
+
+          {showAccountModal && (
+            <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
+              <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 p-6 space-y-4">
+                <div className="flex justify-between items-center"><h3 className="text-base font-extrabold">My Account &amp; Privacy</h3><button onClick={() => setShowAccountModal(false)}><SvgIcon name="x" className="w-5 h-5" /></button></div>
+                <div className="flex items-center gap-4 p-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/20">
+                  <img src={myProfile.avatar_url || DEFAULT_AVATAR} className="w-16 h-16 rounded-full object-cover border-2 border-[#FF6B00] shrink-0" />
+                  <div className="min-w-0 flex-1 text-xs space-y-1">
+                    <p className="font-extrabold text-sm truncate">{myProfile.full_name}, {myProfile.age}</p>
+                    <p className="text-[#9E9E9E] truncate">{myPrefs.locality}, {myPrefs.city}</p>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#FF6B00] text-[11px] font-bold cursor-pointer"><SvgIcon name="camera" className="w-3.5 h-3.5" /><span>{uploadingAvatar ? 'Uploading...' : 'Change Photo'}</span><input type="file" accept="image/*" onChange={updateAvatar} className="hidden" /></label>
+                      <button type="button" onClick={() => setEditingProfile(!editingProfile)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black border border-[#C0C0C0]/30 text-[11px] font-bold"><SvgIcon name="edit" className="w-3.5 h-3.5 text-[#FF6B00]" /><span>{editingProfile ? 'Close Edit' : 'Edit Profile'}</span></button>
+                    </div>
+                  </div>
+                </div>
+                {accountMsg && <p className="text-xs text-[#FF6B00] font-semibold">{accountMsg}</p>}
+                {editingProfile && (
+                  <form onSubmit={saveEditedProfile} className="p-4 rounded-xl bg-[#141414] border border-[#FF6B00]/60 space-y-2.5 text-xs">
+                    <div className="grid grid-cols-2 gap-2">
+                      <input required placeholder="Full Name" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} className={INP} />
+                      <input required placeholder="Occupation" value={editForm.occ} onChange={(e) => setEditForm({ ...editForm, occ: e.target.value })} className={INP} />
+                      <input type="number" min="18" max="65" value={editForm.age} onChange={(e) => setEditForm({ ...editForm, age: e.target.value })} className={INP} />
+                      <select value={editForm.gender} onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })} className={INP}><option>Male</option><option>Female</option><option>Non-binary</option></select>
+                      <select value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value, loc: INDIAN_CITIES[e.target.value][0] })} className={INP}>{CITY_LIST.map((c) => <option key={c}>{c}</option>)}</select>
+                      <select value={editForm.loc} onChange={(e) => setEditForm({ ...editForm, loc: e.target.value })} className={INP}>{INDIAN_CITIES[editForm.city].map((l) => <option key={l}>{l}</option>)}<option value="__OTHER__">Other (Type Area)</option></select>
+                    </div>
+                    {editForm.loc === '__OTHER__' && <input required placeholder={`Area in ${editForm.city}`} value={editForm.customLoc} onChange={(e) => setEditForm({ ...editForm, customLoc: e.target.value })} className={INP} />}
+                    <div>
+                      <label className="block text-[11px] text-[#9E9E9E] mb-1">Budget: ₹{Number(editForm.minB).toLocaleString('en-IN')} – ₹{Number(editForm.maxB).toLocaleString('en-IN')}</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input type="range" min="8000" max="30000" step="1000" value={editForm.minB} onChange={(e) => setEditForm({ ...editForm, minB: Number(e.target.value) })} />
+                        <input type="range" min="12000" max="40000" step="1000" value={editForm.maxB} onChange={(e) => setEditForm({ ...editForm, maxB: Math.max(editForm.minB + 2000, Number(e.target.value)) })} />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select value={editForm.sleep} onChange={(e) => setEditForm({ ...editForm, sleep: e.target.value })} className={INP}><option>Early Bird by 11 PM</option><option>Balanced 12 AM</option><option>Night Owl 2 AM+</option></select>
+                      <select value={editForm.clean} onChange={(e) => setEditForm({ ...editForm, clean: e.target.value })} className={INP}><option>Cleans Daily</option><option>Weekly Maid + Tidy</option><option>Chill / Weekend Clean</option></select>
+                      <select value={editForm.smoke} onChange={(e) => setEditForm({ ...editForm, smoke: e.target.value })} className={INP}><option>No Smoking</option><option>Social / Balcony Only</option><option>Smoker Friendly</option></select>
+                      <select value={editForm.pet} onChange={(e) => setEditForm({ ...editForm, pet: e.target.value })} className={INP}><option>No Pets</option><option>Pet Friendly</option><option>Has a Dog</option><option>Has a Cat</option></select>
+                    </div>
+                    <textarea rows="2" value={editForm.bio} onChange={(e) => setEditForm({ ...editForm, bio: e.target.value })} className={INP} />
+                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={editForm.hasRoom} onChange={(e) => setEditForm({ ...editForm, hasRoom: e.target.checked })} className="accent-[#FF6B00]" />Already have a flat/room shortlisted</label>
+                    <button type="submit" disabled={savingEdit} className="w-full py-2.5 rounded-xl bg-[#FF6B00] font-extrabold">{savingEdit ? 'Saving...' : 'Save Profile Changes'}</button>
+                  </form>
+                )}
+                <button onClick={requestNotifPermission} className="w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 text-xs font-bold flex items-center justify-center gap-2"><SvgIcon name="bell" className="w-4 h-4 text-[#FF6B00]" />{notifPerm === 'granted' ? 'Notifications Enabled ✓' : 'Enable Notifications'}</button>
+                <button onClick={() => { setShowAccountModal(false); openReportModal(null); }} className="w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 text-xs font-bold flex items-center justify-center gap-2"><SvgIcon name="flag" className="w-4 h-4 text-[#FF6B00]" />Report Safety Concern / Feedback</button>
+                <a href="privacy.html" target="_blank" rel="noopener noreferrer" className="block w-full py-2.5 px-4 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 text-center text-xs font-bold">Privacy Policy &amp; Child Safety Standards</a>
+                <div className="pt-3 border-t border-[#C0C0C0]/20">
+                  {!confirmDelete ? (
+                    <button onClick={() => setConfirmDelete(true)} className="w-full py-2.5 rounded-xl bg-black border border-[#C0C0C0]/30 text-xs font-bold text-[#C0C0C0] flex items-center justify-center gap-2"><SvgIcon name="trash" className="w-4 h-4 text-[#FF6B00]" />Delete My Account &amp; All Data</button>
+                  ) : (
+                    <div className="p-3.5 rounded-xl bg-[#141414] border border-[#FF6B00] space-y-3">
+                      <p className="text-xs font-semibold">Permanently delete your profile, swipes, matches, chats, and KYC records?</p>
+                      <div className="flex gap-2"><button onClick={() => setConfirmDelete(false)} className="flex-1 py-2 rounded-lg bg-black border border-[#C0C0C0]/30 text-xs font-bold">Cancel</button><button disabled={deleting} onClick={deleteAccount} className="flex-1 py-2 rounded-lg bg-[#FF6B00] text-xs font-extrabold">{deleting ? 'Deleting...' : 'Confirm Delete'}</button></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {compareItem && (
+            <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
+              <div className="w-full max-w-lg rounded-2xl bg-[#0D0D0D] border border-[#C0C0C0]/30 p-6 space-y-4">
+                <div className="flex justify-between items-center"><h3 className="text-base font-extrabold">You vs. {compareItem.profile.full_name} ({compareItem.comp.totalScore}%)</h3><button onClick={() => setCompareItem(null)}><SvgIcon name="x" className="w-5 h-5" /></button></div>
+                <table className="w-full text-xs border border-[#C0C0C0]/20">
+                  <thead className="bg-[#141414] text-[#9E9E9E]"><tr><th className="p-2 text-left">Habit</th><th className="p-2 text-left">You</th><th className="p-2 text-left">Them</th></tr></thead>
+                  <tbody className="divide-y divide-[#C0C0C0]/15">
+                    {[['Sleep', myPrefs.sleep_schedule, compareItem.prefs.sleep_schedule], ['Cleanliness', myPrefs.cleaning_habit, compareItem.prefs.cleaning_habit], ['Smoking', myPrefs.smoking_habit, compareItem.prefs.smoking_habit], ['Pets', myPrefs.pet_preference, compareItem.prefs.pet_preference]].map(([l, a, b]) => (
+                      <tr key={l}><td className="p-2 text-[#9E9E9E]">{l}</td><td className="p-2">{a}</td><td className={`p-2 font-bold ${a === b ? 'text-[#FF6B00]' : ''}`}>{b}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="flex gap-2">
+                  <button onClick={() => setVibeOutput(buildVibeQuestions(myPrefs, compareItem.prefs, compareItem.comp.frictions))} className="flex-1 py-2.5 rounded-xl bg-[#141414] border border-[#C0C0C0]/30 text-xs font-extrabold">Run Vibe Check</button>
+                  <button onClick={() => { const p = compareItem.profile; setCompareItem(null); openDirectChat(p); }} className="flex-1 py-2.5 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Chat Now</button>
+                </div>
+                {vibeOutput && <div className="p-3 rounded-xl bg-[#141414] space-y-2 text-xs"><p className="font-bold text-[#FF6B00]">Watchouts: {vibeOutput.frictions.join(' • ')}</p><ol className="list-decimal list-inside space-y-1 text-[#C0C0C0]">{vibeOutput.questions.map((q) => <li key={q}>{q}</li>)}</ol></div>}
+              </div>
+            </div>
+          )}
+
+          {matchPopup && (
+            <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
+              <div className="w-full max-w-sm rounded-3xl bg-[#0D0D0D] border-2 border-[#FF6B00] p-6 text-center space-y-4">
+                <h2 className="text-2xl font-extrabold">It&apos;s a Flatmate Match!</h2>
+                <p className="text-xs text-[#C0C0C0]">You and {matchPopup.partner.profile.full_name} matched at {matchPopup.partner.comp.totalScore}%.</p>
+                <button onClick={() => { const mid = matchPopup.match.id; setMatchPopup(null); setFullChatMatchId(mid); setUnreadCount(0); }} className="w-full py-3 rounded-xl bg-[#FF6B00] text-xs font-extrabold">Open Full-Screen Chat</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function AppRoot() {
+      const [session, setSession] = useState(null);
+      const [booting, setBooting] = useState(true);
+      const [recoveryMode, setRecoveryMode] = useState(() => window.location.hash.includes('type=recovery'));
+
+      useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => { setSession(data.session); setBooting(false); });
+        const { data: sub } = supabase.auth.onAuthStateChange((event, nextSession) => {
+          setSession(nextSession);
+          if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true);
+        });
+        return () => sub.subscription.unsubscribe();
+      }, []);
+
+      if (booting) return <div className="min-h-screen bg-black flex items-center justify-center text-xs text-[#9E9E9E]">Connecting...</div>;
+      if (recoveryMode && session) return <ResetPasswordScreen onDone={() => { setRecoveryMode(false); if (window.location.hash) window.history.replaceState({}, '', APP_REDIRECT_URL); }} />;
+      if (!session) return <AuthScreen onAuthSuccess={(s) => setSession(s)} />;
+      return <MainApp session={session} onSignOut={() => supabase.auth.signOut()} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<AppRoot />);
+    if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+  </script>
+</body>
+</html>
